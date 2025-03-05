@@ -159,7 +159,7 @@ def get_availabilities(patient_id, process_id, nre, order_ids):
 def main():
     for i in range(20):
         # Fiscal code of the patient
-        fiscal_code = "SNSLSE98P47L182L"
+        fiscal_code = "xxxxxxxxxxxxxxxxxxxxx"
         
         # Step 1: Get access token
         access_token = get_access_token()
@@ -179,7 +179,7 @@ def main():
         print("Doctor Info Retrieved")
         
         # Step 5: Check prescription
-        nre = "1200A4787459775"
+        nre = "xxxxxxxxxxxxxxxxxxxxx"
         check_prescription_result = check_prescription(patient_id, nre)
         print("Prescription Checked")
         
