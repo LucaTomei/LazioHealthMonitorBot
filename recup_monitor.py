@@ -318,8 +318,26 @@ def is_similar_datetime(date1_str, date2_str, minutes_threshold=30):
     except Exception:
         return False
 
-def compare_availabilities(previous, current, fiscal_code, nre, prescription_name=""):
-    """Compare previous and current availabilities to detect changes with aggregazione intelligente."""
+def compare_availabilities(previous, current, fiscal_code, nre, prescription_name="", config=None):
+    """Compare previous and current availabilities with configuration per prescrizione."""
+    # Configurazione predefinita se non specificata
+    default_config = {
+        "only_new_dates": True,
+        "notify_removed": False,
+        "min_changes_to_notify": 2,
+        "time_threshold_minutes": 60,
+        "show_all_current": True  # Nuovo parametro per mostrare tutte le disponibilità attuali
+    }
+    
+    # Usa la configurazione fornita o quella predefinita
+    if config is None:
+        config = default_config
+    else:
+        # Assicuriamoci che show_all_current sia impostato (default a True se non specificato)
+        if "show_all_current" not in config:
+            config["show_all_current"] = True
+    
+    # Se è la prima volta che controlliamo questa prescrizione
     if not previous or not current:
         # Se non c'erano dati precedenti, consideriamo tutto come nuovo ma non spammiamo
         if not previous and len(current) > 0:
@@ -331,29 +349,38 @@ def compare_availabilities(previous, current, fiscal_code, nre, prescription_nam
                 message += "\n"
             
             message += f"🔔 <b>Prima scansione completata</b>\n\n"
-            message += f"<b>Trovate {len(current)} disponibilità</b>\n"
+            message += f"<b>Trovate {len(current)} disponibilità</b>\n\n"
             
-            # Aggiungiamo solo le prime 3-5 disponibilità come esempio
-            display_items = min(3, len(current))
-            if display_items > 0:
-                message += f"\nEcco le prime {display_items} disponibilità:\n\n"
+            # Mostriamo tutte le disponibilità ordinate per data
+            sorted_availabilities = sorted(current, key=lambda x: x['date'])
+            
+            # Raggruppiamo per ospedale
+            hospitals = {}
+            for avail in sorted_availabilities:
+                hospital_name = avail['hospital']['name']
+                if hospital_name not in hospitals:
+                    hospitals[hospital_name] = []
+                hospitals[hospital_name].append(avail)
+            
+            # Mostriamo per ospedale
+            for hospital_name, availabilities in hospitals.items():
+                message += f"• <b>{hospital_name}</b>\n"
+                message += f"  📍 {availabilities[0]['site']['address']}\n"
                 
-                # Ordiniamo per data crescente
-                sorted_availabilities = sorted(current, key=lambda x: x['date'])
+                for avail in availabilities:
+                    message += f"  📅 {format_date(avail['date'])} - {avail['price']} €\n"
                 
-                for i in range(display_items):
-                    avail = sorted_availabilities[i]
-                    message += f"• {avail['hospital']['name']}\n"
-                    message += f"  📍 {avail['site']['address']}\n"
-                    message += f"  📅 {format_date(avail['date'])}\n"
-                    message += f"  💰 {avail['price']} €\n\n"
+                message += "\n"
             
             return message
         return None
 
-    # Soglie per ridurre il rumore
-    MIN_CHANGES_TO_NOTIFY = 2  # Numero minimo di cambiamenti per inviare notifica
-    TIME_THRESHOLD = 30  # Minuti di differenza per considerare un cambiamento come significativo
+    # Otteniamo i valori di configurazione
+    only_new_dates = config.get("only_new_dates", True)
+    notify_removed = config.get("notify_removed", False)
+    min_changes = config.get("min_changes_to_notify", 2)
+    time_threshold = config.get("time_threshold_minutes", 60)
+    show_all_current = config.get("show_all_current", True)
     
     # Prepara una struttura per i cambiamenti
     changes = {
@@ -399,7 +426,7 @@ def compare_availabilities(previous, current, fiscal_code, nre, prescription_nam
                 is_minor_change = False
                 for prev_date in prev_dates.keys():
                     # Confrontiamo le date ignorando ore e minuti
-                    if is_similar_datetime(prev_date, date, TIME_THRESHOLD):
+                    if is_similar_datetime(prev_date, date, time_threshold):
                         # È probabilmente solo un aggiustamento di orario, non una nuova disponibilità
                         is_minor_change = True
                         break
@@ -407,35 +434,42 @@ def compare_availabilities(previous, current, fiscal_code, nre, prescription_nam
                 if not is_minor_change:
                     changes["new"].append(avail)
         
-        # Verifica date rimosse
-        for date, avail in prev_dates.items():
-            if date not in curr_dates:
-                # Verifichiamo se si tratta solo di un piccolo cambiamento di orario
-                is_minor_change = False
-                for curr_date in curr_dates.keys():
-                    # Confrontiamo le date ignorando ore e minuti
-                    if is_similar_datetime(date, curr_date, TIME_THRESHOLD):
-                        # È probabilmente solo un aggiustamento di orario, non una rimozione
-                        is_minor_change = True
-                        break
-                
-                if not is_minor_change:
-                    changes["removed"].append(avail)
+        # Verifica date rimosse (solo se notify_removed è True)
+        if notify_removed:
+            for date, avail in prev_dates.items():
+                if date not in curr_dates:
+                    # Verifichiamo se si tratta solo di un piccolo cambiamento di orario
+                    is_minor_change = False
+                    for curr_date in curr_dates.keys():
+                        # Confrontiamo le date ignorando ore e minuti
+                        if is_similar_datetime(date, curr_date, time_threshold):
+                            # È probabilmente solo un aggiustamento di orario, non una rimozione
+                            is_minor_change = True
+                            break
+                    
+                    if not is_minor_change:
+                        changes["removed"].append(avail)
         
-        # Verifica cambiamenti di prezzo
-        for date, curr_avail in curr_dates.items():
-            if date in prev_dates:
-                prev_avail = prev_dates[date]
-                if prev_avail['price'] != curr_avail['price']:
-                    changes["changed"].append({
-                        "previous": prev_avail,
-                        "current": curr_avail
-                    })
+        # Verifica cambiamenti di prezzo (solo se only_new_dates è False)
+        if not only_new_dates:
+            for date, curr_avail in curr_dates.items():
+                if date in prev_dates:
+                    prev_avail = prev_dates[date]
+                    if prev_avail['price'] != curr_avail['price']:
+                        changes["changed"].append({
+                            "previous": prev_avail,
+                            "current": curr_avail
+                        })
     
-    # Se ci sono abbastanza cambiamenti o cambiamenti significativi, costruisci un messaggio
-    total_changes = len(changes["new"]) + len(changes["removed"]) + len(changes["changed"])
+    # Calcoliamo il totale dei cambiamenti in base alla configurazione
+    total_changes = len(changes["new"])
+    if notify_removed:
+        total_changes += len(changes["removed"])
+    if not only_new_dates:
+        total_changes += len(changes["changed"])
     
-    if total_changes >= MIN_CHANGES_TO_NOTIFY:
+    # Se ci sono abbastanza cambiamenti, costruisci un messaggio
+    if total_changes >= min_changes or (len(changes["new"]) > 0 and only_new_dates):
         # Prima riga: codici e nome prescrizione in formato copiabile senza altre formattazioni
         message = f"<code>{fiscal_code} {nre}</code>\n"
         if prescription_name:
@@ -443,12 +477,17 @@ def compare_availabilities(previous, current, fiscal_code, nre, prescription_nam
         else:
             message += "\n"
         
-        # Aggiungiamo l'intestazione dopo la riga copiabile
-        message += f"🔔 <b>Aggiornamento disponibilità</b> ({total_changes} cambiamenti)\n\n"
+        # Intestazione del messaggio
+        if only_new_dates:
+            message += f"🔔 <b>Nuove disponibilità ({len(changes['new'])})</b>\n\n"
+        else:
+            message += f"🔔 <b>Aggiornamento disponibilità ({total_changes} cambiamenti)</b>\n\n"
         
-        # Raggruppiamo per ospedale per rendere più leggibile il messaggio
+        # Mostriamo solo le nuove disponibilità se only_new_dates è True
         if changes["new"]:
-            message += f"<b>✅ {len(changes['new'])} Nuove disponibilità:</b>\n"
+            if not only_new_dates:
+                message += f"<b>✅ {len(changes['new'])} Nuove disponibilità:</b>\n"
+            
             # Raggruppiamo per ospedale
             hospitals_new = {}
             for avail in changes["new"]:
@@ -465,19 +504,14 @@ def compare_availabilities(previous, current, fiscal_code, nre, prescription_nam
                 # Ordiniamo le date
                 sorted_availabilities = sorted(availabilities, key=lambda x: x['date'])
                 
-                # Mostriamo fino a 3 date per ospedale
-                display_count = min(3, len(sorted_availabilities))
-                for i in range(display_count):
-                    avail = sorted_availabilities[i]
+                # Mostriamo tutte le date
+                for avail in sorted_availabilities:
                     message += f"  📅 {format_date(avail['date'])} - {avail['price']} €\n"
-                
-                # Se ci sono più date, indichiamo quante altre sono disponibili
-                if len(sorted_availabilities) > display_count:
-                    message += f"  <i>+ altre {len(sorted_availabilities) - display_count} date disponibili</i>\n"
                 
                 message += "\n"
         
-        if changes["removed"]:
+        # Mostriamo le disponibilità rimosse solo se notify_removed è True
+        if notify_removed and changes["removed"]:
             message += f"<b>❌ {len(changes['removed'])} Disponibilità rimosse:</b>\n"
             # Raggruppiamo per ospedale
             hospitals_removed = {}
@@ -495,19 +529,14 @@ def compare_availabilities(previous, current, fiscal_code, nre, prescription_nam
                 # Ordiniamo le date
                 sorted_availabilities = sorted(availabilities, key=lambda x: x['date'])
                 
-                # Mostriamo fino a 3 date per ospedale
-                display_count = min(3, len(sorted_availabilities))
-                for i in range(display_count):
-                    avail = sorted_availabilities[i]
+                # Mostriamo tutte le date
+                for avail in sorted_availabilities:
                     message += f"  📅 {format_date(avail['date'])}\n"
-                
-                # Se ci sono più date, indichiamo quante altre sono state rimosse
-                if len(sorted_availabilities) > display_count:
-                    message += f"  <i>+ altre {len(sorted_availabilities) - display_count} date rimosse</i>\n"
                 
                 message += "\n"
         
-        if changes["changed"]:
+        # Mostriamo i cambiamenti di prezzo solo se only_new_dates è False
+        if not only_new_dates and changes["changed"]:
             message += f"<b>🔄 {len(changes['changed'])} Disponibilità con prezzi modificati:</b>\n"
             # Raggruppiamo per ospedale
             hospitals_changed = {}
@@ -525,15 +554,35 @@ def compare_availabilities(previous, current, fiscal_code, nre, prescription_nam
                 # Ordiniamo le date
                 sorted_changes = sorted(changes_list, key=lambda x: x['current']['date'])
                 
-                # Mostriamo fino a 3 date per ospedale
-                display_count = min(3, len(sorted_changes))
-                for i in range(display_count):
-                    change = sorted_changes[i]
+                # Mostriamo tutte le date
+                for change in sorted_changes:
                     message += f"  📅 {format_date(change['current']['date'])}: {change['previous']['price']} € → {change['current']['price']} €\n"
                 
-                # Se ci sono più cambiamenti, indichiamo quanti altri ci sono
-                if len(sorted_changes) > display_count:
-                    message += f"  <i>+ altri {len(sorted_changes) - display_count} cambiamenti di prezzo</i>\n"
+                message += "\n"
+        
+        # Aggiungiamo tutte le disponibilità attuali se show_all_current è True
+        if show_all_current and current:
+            message += f"\n<b>📋 Tutte le disponibilità attuali ({len(current)}):</b>\n\n"
+            
+            # Raggruppiamo per ospedale
+            hospitals = {}
+            for avail in current:
+                hospital_name = avail['hospital']['name']
+                if hospital_name not in hospitals:
+                    hospitals[hospital_name] = []
+                hospitals[hospital_name].append(avail)
+            
+            # Mostriamo per ospedale
+            for hospital_name, availabilities in hospitals.items():
+                message += f"• <b>{hospital_name}</b>\n"
+                message += f"  📍 {availabilities[0]['site']['address']}\n"
+                
+                # Ordiniamo le date
+                sorted_availabilities = sorted(availabilities, key=lambda x: x['date'])
+                
+                # Mostriamo tutte le date
+                for avail in sorted_availabilities:
+                    message += f"  📅 {format_date(avail['date'])} - {avail['price']} €\n"
                 
                 message += "\n"
         
@@ -562,6 +611,9 @@ def process_prescription(prescription, previous_data):
     fiscal_code = prescription["fiscal_code"]
     nre = prescription["nre"]
     prescription_key = f"{fiscal_code}_{nre}"
+    
+    # Otteniamo la configurazione specifica per questa prescrizione
+    config = prescription.get("config", {})
     
     logger.info(f"Elaborazione prescrizione {prescription_key}")
     
@@ -624,14 +676,22 @@ def process_prescription(prescription, previous_data):
     # Compare with previous data to detect changes
     previous_availabilities = previous_data.get(prescription_key, [])
     
-    # Usa la funzione di processamento e notifica
-    process_data_and_notify(
+    # Confronta e genera un messaggio se ci sono cambiamenti significativi
+    changes_message = compare_availabilities(
+        previous_availabilities, 
+        current_availabilities,
         fiscal_code,
         nre,
-        previous_availabilities,
-        current_availabilities,
-        prescription_name
+        prescription_name,
+        config
     )
+    
+    # Se ci sono cambiamenti, invia una notifica
+    if changes_message:
+        logger.info(f"Rilevati cambiamenti significativi per {prescription_key}")
+        send_telegram_message(changes_message)
+    else:
+        logger.info(f"Nessun cambiamento significativo rilevato per {prescription_key}")
     
     # Update previous data for next comparison
     previous_data[prescription_key] = current_availabilities
