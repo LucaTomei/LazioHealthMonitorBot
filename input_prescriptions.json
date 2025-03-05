@@ -1,6 +1,12 @@
 [
-    {
-      "fiscal_code": "xxxxxxxxxxx",
-      "nre": "1200A2321312"
-    }
+  {
+     "fiscal_code": "xxxx",
+     "nre": "1200A23232132",
+     "config": {
+        "only_new_dates": true,
+        "notify_removed": false,
+        "min_changes_to_notify": 2,
+        "time_threshold_minutes": 60
+     }
+  }
 ]
