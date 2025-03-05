@@ -396,22 +396,20 @@ def compare_availabilities(previous, current, fiscal_code, nre, prescription_nam
     if not previous or not current:
         # Se non c'erano dati precedenti, consideriamo tutto come nuovo ma non spammiamo
         if not previous and len(current) > 0:
-            # Creiamo un messaggio iniziale con un riassunto
-            message = f"<code>{fiscal_code}</code> - <code> {nre}</code>\n"
-            if prescription_name:
-                message += f"<code>{prescription_name}</code>\n\n"
-            else:
-                message += "\n"
-            
-            message += f"🔔 <b>Prima scansione completata</b>\n\n"
-            message += f"<b>Trovate {len(current)} disponibilità</b>\n\n"
-            
-            # Mostriamo tutte le disponibilità ordinate per data
-            sorted_availabilities = sorted(current, key=lambda x: x['date'])
+            # Preparazione del messaggio con formattazione HTML migliorata
+            message = f"""
+<b>🔍 Nuova Prescrizione</b>
+
+<b>Codice Fiscale:</b> <code>{fiscal_code}</code>
+<b>NRE:</b> <code>{nre}</code>
+<b>Descrizione:</b> <code>{prescription_name}</code>
+
+📋 <b>Disponibilità Trovate:</b> {len(current)}
+"""
             
             # Raggruppiamo per ospedale
             hospitals = {}
-            for avail in sorted_availabilities:
+            for avail in sorted(current, key=lambda x: x['date']):
                 hospital_name = avail['hospital']['name']
                 if hospital_name not in hospitals:
                     hospitals[hospital_name] = []
@@ -419,13 +417,13 @@ def compare_availabilities(previous, current, fiscal_code, nre, prescription_nam
             
             # Mostriamo per ospedale
             for hospital_name, availabilities in hospitals.items():
-                message += f"• <b>{hospital_name}</b>\n"
-                message += f"  📍 {availabilities[0]['site']['address']}\n"
+                message += f"\n<b>{hospital_name}</b>\n"
+                message += f"📍 {availabilities[0]['site']['address']}\n"
                 
-                for avail in availabilities:
-                    message += f"  📅 {format_date(avail['date'])} - {avail['price']} €\n"
+                for avail in sorted(availabilities, key=lambda x: x['date']):
+                    message += f"📅 {format_date(avail['date'])} - {avail['price']} €\n"
                 
-                message += "\n"
+                message += "\n"  # Spazio tra gli ospedali
             
             return message
         return None
@@ -525,23 +523,24 @@ def compare_availabilities(previous, current, fiscal_code, nre, prescription_nam
     
     # Se ci sono abbastanza cambiamenti, costruisci un messaggio
     if total_changes >= min_changes or (len(changes["new"]) > 0 and only_new_dates):
-        # Prima riga: codici e nome prescrizione in formato copiabile senza altre formattazioni
-        message = f"<code>{fiscal_code}</code> - </code>{nre}</code>\n"
-        if prescription_name:
-            message += f"<code>{prescription_name}</code>\n\n"
-        else:
-            message += "\n"
+        # Preparazione del messaggio con formattazione HTML migliorata
+        message = f"""
+<b>🔍 Aggiornamento Prescrizione</b>
+
+<b>Codice Fiscale:</b> <code>{fiscal_code}</code>
+<b>NRE:</b> <code>{nre}</code>
+<b>Descrizione:</b> <code>{prescription_name}</code>
+"""
         
         # Intestazione del messaggio
         if only_new_dates:
-            message += f"🔔 <b>Nuove disponibilità ({len(changes['new'])})</b>\n\n"
+            message += f"🆕 <b>Nuove Disponibilità:</b> {len(changes['new'])}\n"
         else:
-            message += f"🔔 <b>Aggiornamento disponibilità ({total_changes} cambiamenti)</b>\n\n"
+            message += f"🔄 <b>Cambiamenti:</b> {total_changes}\n"
         
-        # Mostriamo solo le nuove disponibilità se only_new_dates è True
+        # Nuove disponibilità
         if changes["new"]:
-            if not only_new_dates:
-                message += f"<b>✅ {len(changes['new'])} Nuove disponibilità:</b>\n"
+            message += "\n<b>🟢 Nuove Disponibilità:</b>\n"
             
             # Raggruppiamo per ospedale
             hospitals_new = {}
@@ -553,22 +552,19 @@ def compare_availabilities(previous, current, fiscal_code, nre, prescription_nam
             
             # Mostriamo per ospedale
             for hospital_name, availabilities in hospitals_new.items():
-                message += f"\n• <b>{hospital_name}</b>\n"
-                message += f"  📍 {availabilities[0]['site']['address']}\n"
+                message += f"\n<b>{hospital_name}</b>\n"
+                message += f"📍 {availabilities[0]['site']['address']}\n"
                 
                 # Ordiniamo le date
                 sorted_availabilities = sorted(availabilities, key=lambda x: x['date'])
                 
                 # Mostriamo tutte le date
                 for avail in sorted_availabilities:
-                    message += f"  📅 {format_date(avail['date'])} - {avail['price']} €\n"
-                
-                message += "\n"
+                    message += f"📅 {format_date(avail['date'])} - {avail['price']} €\n"
         
-        # Mostriamo le disponibilità rimosse solo se notify_removed è True
+        # Disponibilità rimosse (se configurato)
         if notify_removed and changes["removed"]:
-            message += f"<b>❌ {len(changes['removed'])} Disponibilità rimosse:</b>\n"
-            # Raggruppiamo per ospedale
+            message += "\n<b>🔴 Disponibilità Rimosse:</b>\n"
             hospitals_removed = {}
             for avail in changes["removed"]:
                 hospital_name = avail['hospital']['name']
@@ -576,50 +572,19 @@ def compare_availabilities(previous, current, fiscal_code, nre, prescription_nam
                     hospitals_removed[hospital_name] = []
                 hospitals_removed[hospital_name].append(avail)
             
-            # Mostriamo per ospedale
             for hospital_name, availabilities in hospitals_removed.items():
-                message += f"\n• <b>{hospital_name}</b>\n"
-                message += f"  📍 {availabilities[0]['site']['address']}\n"
+                message += f"\n<b>{hospital_name}</b>\n"
+                message += f"📍 {availabilities[0]['site']['address']}\n"
                 
-                # Ordiniamo le date
                 sorted_availabilities = sorted(availabilities, key=lambda x: x['date'])
                 
-                # Mostriamo tutte le date
                 for avail in sorted_availabilities:
-                    message += f"  📅 {format_date(avail['date'])}\n"
-                
-                message += "\n"
+                    message += f"📅 {format_date(avail['date'])}\n"
         
-        # Mostriamo i cambiamenti di prezzo solo se only_new_dates è False
-        if not only_new_dates and changes["changed"]:
-            message += f"<b>🔄 {len(changes['changed'])} Disponibilità con prezzi modificati:</b>\n"
-            # Raggruppiamo per ospedale
-            hospitals_changed = {}
-            for change in changes["changed"]:
-                hospital_name = change['current']['hospital']['name']
-                if hospital_name not in hospitals_changed:
-                    hospitals_changed[hospital_name] = []
-                hospitals_changed[hospital_name].append(change)
-            
-            # Mostriamo per ospedale
-            for hospital_name, changes_list in hospitals_changed.items():
-                message += f"\n• <b>{hospital_name}</b>\n"
-                message += f"  📍 {changes_list[0]['current']['site']['address']}\n"
-                
-                # Ordiniamo le date
-                sorted_changes = sorted(changes_list, key=lambda x: x['current']['date'])
-                
-                # Mostriamo tutte le date
-                for change in sorted_changes:
-                    message += f"  📅 {format_date(change['current']['date'])}: {change['previous']['price']} € → {change['current']['price']} €\n"
-                
-                message += "\n"
-        
-        # Aggiungiamo tutte le disponibilità attuali se show_all_current è True
+        # Tutte le disponibilità attuali
         if show_all_current and current:
-            message += f"\n<b>📋 Tutte le disponibilità attuali ({len(current)}):</b>\n\n"
+            message += f"\n📋 <b>Tutte le Disponibilità:</b> {len(current)}\n"
             
-            # Raggruppiamo per ospedale
             hospitals = {}
             for avail in current:
                 hospital_name = avail['hospital']['name']
@@ -627,19 +592,14 @@ def compare_availabilities(previous, current, fiscal_code, nre, prescription_nam
                     hospitals[hospital_name] = []
                 hospitals[hospital_name].append(avail)
             
-            # Mostriamo per ospedale
             for hospital_name, availabilities in hospitals.items():
-                message += f"• <b>{hospital_name}</b>\n"
-                message += f"  📍 {availabilities[0]['site']['address']}\n"
+                message += f"\n<b>{hospital_name}</b>\n"
+                message += f"📍 {availabilities[0]['site']['address']}\n"
                 
-                # Ordiniamo le date
                 sorted_availabilities = sorted(availabilities, key=lambda x: x['date'])
                 
-                # Mostriamo tutte le date
                 for avail in sorted_availabilities:
-                    message += f"  📅 {format_date(avail['date'])} - {avail['price']} €\n"
-                
-                message += "\n"
+                    message += f"📅 {format_date(avail['date'])} - {avail['price']} €\n"
         
         return message
     
