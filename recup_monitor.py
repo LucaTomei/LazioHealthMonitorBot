@@ -242,17 +242,39 @@ def get_availabilities(patient_id, process_id, nre, order_ids):
         return None
 
 def send_telegram_message(message, chat_id=None):
-    """Send a message to Telegram.
+    """Send a message to Telegram with comprehensive error handling and debugging."""
+    # Default chat ID if not provided
+    DEFAULT_CHAT_ID = "YOUR_DEFAULT_CHAT_ID"
+    target_chat_id = chat_id or DEFAULT_CHAT_ID
     
-    Args:
-        message (str): Il messaggio da inviare
-        chat_id (str, optional): L'ID chat specifico a cui inviare il messaggio.
-                                Se non specificato, usa il valore predefinito.
-    """
+    # Validate message and chat_id
+    if not message:
+        logger.error("Empty message. Cannot send Telegram notification")
+        return False
     
-    # Usa l'ID chat specifico se fornito, altrimenti usa quello predefinito
-    target_chat_id = chat_id 
+    if not target_chat_id:
+        logger.error("No chat ID provided for Telegram notification")
+        return False
     
+    # Clean up the message
+    try:
+        # Remove invalid XML characters
+        def remove_invalid_xml_chars(text):
+            # Remove control characters except newline and tab
+            return ''.join(char for char in text if char.isprintable() or char in '\n\t')
+        
+        message = remove_invalid_xml_chars(message)
+        
+        # Truncate very long messages to prevent Telegram API errors
+        MAX_MESSAGE_LENGTH = 4096
+        if len(message) > MAX_MESSAGE_LENGTH:
+            logger.warning(f"Message too long. Truncating from {len(message)} to {MAX_MESSAGE_LENGTH} characters")
+            message = message[:MAX_MESSAGE_LENGTH] + "... [Message truncated]"
+    except Exception as clean_error:
+        logger.error(f"Error cleaning message: {clean_error}")
+        return False
+    
+    # Prepare Telegram API request
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     data = {
         "chat_id": target_chat_id,
@@ -262,29 +284,51 @@ def send_telegram_message(message, chat_id=None):
     }
     
     try:
-        response = requests.post(url, data=data)
-        response.raise_for_status()
-        logger.info(f"Messaggio Telegram inviato con successo a {target_chat_id}")
-        return True
-    except Exception as e:
-        logger.error(f"Errore nell'invio del messaggio Telegram a {target_chat_id}: {str(e)}")
+        # Send the message with a timeout
+        response = requests.post(url, data=data, timeout=10)
         
-        return False
+        # Detailed error handling for various scenarios
+        if response.status_code == 400:
+            error_details = response.json().get('description', 'Unknown error')
+            logger.error(f"Telegram API Bad Request: {error_details}")
+            
+            # Specific error handling
+            if "message is too long" in error_details.lower():
+                logger.warning("Message exceeds Telegram's length limit")
+                data['text'] = message[:3900] + "... [Message truncated due to length]"
+                response = requests.post(url, data=data, timeout=10)
+            
+            # Invalid HTML parsing
+            elif "can't parse entities" in error_details.lower():
+                logger.warning("HTML parsing error. Removing HTML formatting.")
+                data['parse_mode'] = None
+                response = requests.post(url, data=data, timeout=10)
+        
+        # Raise an exception for non-200 status codes
+        response.raise_for_status()
+        
+        logger.info(f"Telegram message sent successfully to {target_chat_id}")
+        return True
+    
+    except requests.exceptions.Timeout:
+        logger.error(f"Telegram message send timed out for chat {target_chat_id}")
+    except requests.exceptions.HTTPError as http_err:
+        logger.error(f"HTTP error sending Telegram message: {http_err}")
+        # Log full response for debugging
+        try:
+            logger.error(f"Response content: {http_err.response.text}")
+        except:
+            pass
+    except requests.exceptions.RequestException as req_err:
+        logger.error(f"Error sending Telegram message to {target_chat_id}: {req_err}")
+    except Exception as e:
+        logger.error(f"Unexpected error in Telegram message sending: {e}")
+    
+    return False
 
 def load_input_data():
     """Load prescription data from input file."""
     try:
-        if not os.path.exists(INPUT_FILE):
-            # Create a sample input file if it doesn't exist
-            sample_data = [
-                {
-                    "fiscal_code": "SNSLSE98P47L182L",
-                    "nre": "1200A4787459775"
-                }
-            ]
-            with open(INPUT_FILE, 'w') as f:
-                json.dump(sample_data, f, indent=2)
-            logger.info(f"File di input di esempio creato: {INPUT_FILE}")
             
         with open(INPUT_FILE, 'r') as f:
             return json.load(f)
