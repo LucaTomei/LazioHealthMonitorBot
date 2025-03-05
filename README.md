@@ -52,7 +52,6 @@ Questa guida ti aiuterà a configurare il servizio di monitoraggio delle prenota
 
 4. Modifica le seguenti variabili nel file:
    - `TELEGRAM_TOKEN`: inserisci il token del tuo bot Telegram
-   - `TELEGRAM_CHAT_ID`: inserisci il tuo ID chat Telegram
 
 5. Salva il file (Ctrl+O, quindi Invio, poi Ctrl+X)
 
@@ -65,29 +64,38 @@ Questa guida ti aiuterà a configurare il servizio di monitoraggio delle prenota
    ```json
    [
       {
-         "fiscal_code": "xxxx",
-         "nre": "1200A23232132",
-         "config": {
-            "only_new_dates": true,
-            "notify_removed": false,
-            "min_changes_to_notify": 2,
-            "time_threshold_minutes": 60
+      "fiscal_code": "RSSMRA80A01H501Z",
+      "nre": "1200A5555555555",
+      "telegram_chat_id": "123456789",
+      "config": {
+            "only_new_dates": false,
+            "notify_removed": true,
+            "min_changes_to_notify": 1,
+            "time_threshold_minutes": 30,
+            "show_all_current": false
          }
       }
    ]
    ```
 
-   **Opzioni di configurazione:**
-   - `only_new_dates`: Se `true`, riceverai notifiche SOLO per nuove disponibilità (ignora rimozioni e cambiamenti di prezzo)
-   - `notify_removed`: Se `false`, non riceverai notifiche quando le disponibilità vengono rimosse
-   - `min_changes_to_notify`: Numero minimo di cambiamenti prima di inviare una notifica
-   - `time_threshold_minutes`: Tempo in minuti entro cui considerare due orari come lo stesso appuntamento spostato
+   ### Parametri di configurazione
 
-   **Esempio di comportamento**:
-   - Con `only_new_dates: true`: Riceverai notifiche SOLO quando ci sono nuove disponibilità
-   - Con `notify_removed: false`: Non riceverai notifiche quando le date vengono rimosse
-   - Con `min_changes_to_notify: 2`: Riceverai notifiche solo quando ci sono almeno 2 cambiamenti significativi
-   - Con `time_threshold_minutes: 60`: Cambiamenti di orario entro 60 minuti verranno considerati come lo stesso appuntamento spostato
+   #### Parametri principali
+   | Parametro | Tipo | Descrizione |
+   |-----------|------|-------------|
+   | `fiscal_code` | String | Codice fiscale del paziente |
+   | `nre` | String | Numero di Ricetta Elettronica da monitorare |
+   | `telegram_chat_id` | String | ID della chat Telegram a cui inviare le notifiche per questa prescrizione specifica |
+
+   ### Opzioni di configurazione (`config`)
+   | Opzione | Tipo | Default | Descrizione |
+   |---------|------|---------|-------------|
+   | `only_new_dates` | Boolean | `true` | Se `true`, riceverai notifiche solo per nuove disponibilità (non per rimozioni o cambiamenti di prezzo) |
+   | `notify_removed` | Boolean | `false` | Se `true`, riceverai notifiche quando le disponibilità vengono rimosse |
+   | `min_changes_to_notify` | Number | `2` | Numero minimo di cambiamenti prima di inviare una notifica |
+   | `time_threshold_minutes` | Number | `60` | Minuti entro cui considerare due appuntamenti come lo stesso spostato di orario |
+   | `show_all_current` | Boolean | `true` | Se `true`, il messaggio includerà tutte le disponibilità attuali, non solo le nuove |
+
 
 
 8. Salva il file (Ctrl+O, quindi Invio, poi Ctrl+X)
