@@ -64,16 +64,31 @@ Questa guida ti aiuterà a configurare il servizio di monitoraggio delle prenota
 7. Incolla il contenuto del file di esempio e modifica i dati con le tue prescrizioni:
    ```json
    [
-     {
-       "fiscal_code": "TUOCODICEFISCALE",
-       "nre": "NUMERORICETTAELETTRONICA"
-     },
-     {
-       "fiscal_code": "ALTROCODICEFISCALE",
-       "nre": "ALTRANUMEROREICETTAELETTRONICA"
-     }
+      {
+         "fiscal_code": "xxxx",
+         "nre": "1200A23232132",
+         "config": {
+            "only_new_dates": true,
+            "notify_removed": false,
+            "min_changes_to_notify": 2,
+            "time_threshold_minutes": 60
+         }
+      }
    ]
    ```
+
+   **Opzioni di configurazione:**
+   - `only_new_dates`: Se `true`, riceverai notifiche SOLO per nuove disponibilità (ignora rimozioni e cambiamenti di prezzo)
+   - `notify_removed`: Se `false`, non riceverai notifiche quando le disponibilità vengono rimosse
+   - `min_changes_to_notify`: Numero minimo di cambiamenti prima di inviare una notifica
+   - `time_threshold_minutes`: Tempo in minuti entro cui considerare due orari come lo stesso appuntamento spostato
+
+   **Esempio di comportamento**:
+   - Con `only_new_dates: true`: Riceverai notifiche SOLO quando ci sono nuove disponibilità
+   - Con `notify_removed: false`: Non riceverai notifiche quando le date vengono rimosse
+   - Con `min_changes_to_notify: 2`: Riceverai notifiche solo quando ci sono almeno 2 cambiamenti significativi
+   - Con `time_threshold_minutes: 60`: Cambiamenti di orario entro 60 minuti verranno considerati come lo stesso appuntamento spostato
+
 
 8. Salva il file (Ctrl+O, quindi Invio, poi Ctrl+X)
 
