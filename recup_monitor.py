@@ -29,8 +29,7 @@ BASE_URL = "https://recup-webapi-appmobile.regione.lazio.it"
 AUTH_HEADER = "Basic QVBQTU9CSUxFX1NQRUNJQUw6UGs3alVTcDgzbUh4VDU4NA=="
 
 # Configurazione Telegram
-TELEGRAM_TOKEN = "7616599944:AAFVKGbtNAHwpc87Qf6Qwe-2Jy-GrWnFWJ8"  # Inserisci il tuo token del bot Telegram
-TELEGRAM_CHAT_ID = "303679205"  # Inserisci l'ID della chat a cui inviare le notifiche
+TELEGRAM_TOKEN = "7616599944:sadsdasda-2Jy-GrWnFWJ8"  # Inserisci il tuo token del bot Telegram
 
 # Percorso del file di input e dati precedenti
 INPUT_FILE = "input_prescriptions.json"
@@ -242,22 +241,34 @@ def get_availabilities(patient_id, process_id, nre, order_ids):
         logger.error(f"Errore nell'ottenere le disponibilità per {nre}: {str(e)}")
         return None
 
-def send_telegram_message(message):
-    """Send a message to Telegram."""
+def send_telegram_message(message, chat_id=None):
+    """Send a message to Telegram.
+    
+    Args:
+        message (str): Il messaggio da inviare
+        chat_id (str, optional): L'ID chat specifico a cui inviare il messaggio.
+                                Se non specificato, usa il valore predefinito.
+    """
+    
+    # Usa l'ID chat specifico se fornito, altrimenti usa quello predefinito
+    target_chat_id = chat_id 
+    
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     data = {
-        "chat_id": TELEGRAM_CHAT_ID,
+        "chat_id": target_chat_id,
         "text": message,
-        "parse_mode": "HTML"
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True
     }
     
     try:
         response = requests.post(url, data=data)
         response.raise_for_status()
-        logger.info("Messaggio Telegram inviato con successo")
+        logger.info(f"Messaggio Telegram inviato con successo a {target_chat_id}")
         return True
     except Exception as e:
-        logger.error(f"Errore nell'invio del messaggio Telegram: {str(e)}")
+        logger.error(f"Errore nell'invio del messaggio Telegram a {target_chat_id}: {str(e)}")
+        
         return False
 
 def load_input_data():
@@ -342,7 +353,7 @@ def compare_availabilities(previous, current, fiscal_code, nre, prescription_nam
         # Se non c'erano dati precedenti, consideriamo tutto come nuovo ma non spammiamo
         if not previous and len(current) > 0:
             # Creiamo un messaggio iniziale con un riassunto
-            message = f"<code>{fiscal_code} {nre}</code>\n"
+            message = f"<code>{fiscal_code}</code> - <code> {nre}</code>\n"
             if prescription_name:
                 message += f"<code>{prescription_name}</code>\n\n"
             else:
@@ -471,7 +482,7 @@ def compare_availabilities(previous, current, fiscal_code, nre, prescription_nam
     # Se ci sono abbastanza cambiamenti, costruisci un messaggio
     if total_changes >= min_changes or (len(changes["new"]) > 0 and only_new_dates):
         # Prima riga: codici e nome prescrizione in formato copiabile senza altre formattazioni
-        message = f"<code>{fiscal_code} {nre}</code>\n"
+        message = f"<code>{fiscal_code}</code> - </code>{nre}</code>\n"
         if prescription_name:
             message += f"<code>{prescription_name}</code>\n\n"
         else:
@@ -615,6 +626,9 @@ def process_prescription(prescription, previous_data):
     # Otteniamo la configurazione specifica per questa prescrizione
     config = prescription.get("config", {})
     
+    # Otteniamo l'ID chat Telegram specifico per questa prescrizione, se presente
+    telegram_chat_id = prescription.get("telegram_chat_id")
+    
     logger.info(f"Elaborazione prescrizione {prescription_key}")
     
     # Step 1: Get access token
@@ -689,7 +703,13 @@ def process_prescription(prescription, previous_data):
     # Se ci sono cambiamenti, invia una notifica
     if changes_message:
         logger.info(f"Rilevati cambiamenti significativi per {prescription_key}")
-        send_telegram_message(changes_message)
+        
+        # Invia al chat ID specifico se presente, altrimenti usa quello predefinito
+        send_telegram_message(changes_message, telegram_chat_id)
+        
+        # Log se è stato utilizzato un chat ID specifico
+        if telegram_chat_id:
+            logger.info(f"Notifica inviata al chat ID specifico: {telegram_chat_id}")
     else:
         logger.info(f"Nessun cambiamento significativo rilevato per {prescription_key}")
     

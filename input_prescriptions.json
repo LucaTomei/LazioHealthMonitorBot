@@ -2,6 +2,7 @@
   {
      "fiscal_code": "xxxx",
      "nre": "1200A23232132",
+     "telegram_chat_id": "xxxxx",
      "config": {
         "only_new_dates": true,
         "notify_removed": false,
