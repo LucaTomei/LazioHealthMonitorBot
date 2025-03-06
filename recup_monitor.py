@@ -49,7 +49,7 @@ PREVIOUS_DATA_FILE = "previous_data.json"
 USERS_FILE = "authorized_users.json"
 
 # Stati per la conversazione
-WAITING_FOR_FISCAL_CODE, WAITING_FOR_NRE, CONFIRM_ADD, WAITING_FOR_PRESCRIPTION_TO_DELETE = range(4)
+WAITING_FOR_FISCAL_CODE, WAITING_FOR_NRE, CONFIRM_ADD, WAITING_FOR_PRESCRIPTION_TO_DELETE, WAITING_FOR_PRESCRIPTION_TO_TOGGLE = range(5)
 
 # Dizionario per tenere traccia delle conversazioni in corso
 user_data = {}
@@ -715,24 +715,29 @@ def process_prescription(prescription, previous_data, chat_id=None):
     if changes_message:
         logger.info(f"Rilevati cambiamenti significativi per {prescription_key}")
         
-         # Invia al chat ID specifico se presente, altrimenti usa quello predefinito
-        try:
-            # Utilizziamo il metodo normale invece di quello asincrono per evitare problemi
-            import requests
-            
-            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-            data = {
-                "chat_id": telegram_chat_id,
-                "text": changes_message,
-                "parse_mode": "HTML"
-            }
-            
-            response = requests.post(url, data=data, timeout=10)
-            response.raise_for_status()
-            
-            logger.info(f"Notifica inviata al chat ID: {telegram_chat_id}")
-        except Exception as e:
-            logger.error(f"Errore nell'inviare notifica: {str(e)}")
+        # Controlliamo se le notifiche sono abilitate per questa prescrizione
+        notifications_enabled = prescription.get("notifications_enabled", True)  # Default a True
+        
+        if notifications_enabled:
+            try:
+                # Utilizziamo il metodo normale invece di quello asincrono per evitare problemi
+                import requests
+                
+                url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+                data = {
+                    "chat_id": telegram_chat_id,
+                    "text": changes_message,
+                    "parse_mode": "HTML"
+                }
+                
+                response = requests.post(url, data=data, timeout=10)
+                response.raise_for_status()
+                
+                logger.info(f"Notifica inviata al chat ID: {telegram_chat_id}")
+            except Exception as e:
+                logger.error(f"Errore nell'inviare notifica: {str(e)}")
+        else:
+            logger.info(f"Notifiche disabilitate per {prescription_key}, nessun messaggio inviato")
     else:
         logger.info(f"Nessun cambiamento significativo rilevato per {prescription_key}")
     
@@ -740,6 +745,136 @@ def process_prescription(prescription, previous_data, chat_id=None):
     previous_data[prescription_key] = current_availabilities
     
     return True, prescription_name
+
+
+async def toggle_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Abilita o disabilita le notifiche per una prescrizione."""
+    user_id = update.effective_user.id
+    
+    # Controlliamo se l'utente è autorizzato
+    if str(user_id) not in authorized_users:
+        await update.message.reply_text("🔒 Non sei autorizzato ad utilizzare questa funzione.")
+        return
+    
+    # Carichiamo le prescrizioni
+    prescriptions = load_input_data()
+    
+    # Filtriamo solo le prescrizioni dell'utente o tutte se è admin
+    is_admin = user_id == int(authorized_users[0]) if authorized_users else False
+    user_prescriptions = []
+    
+    if is_admin:
+        # L'admin vede tutte le prescrizioni
+        user_prescriptions = prescriptions
+    else:
+        # Gli utenti normali vedono solo le proprie
+        user_prescriptions = [p for p in prescriptions if p.get("telegram_chat_id") == user_id]
+    
+    if not user_prescriptions:
+        await update.message.reply_text("⚠️ Non hai prescrizioni da gestire.")
+        return ConversationHandler.END
+    
+    # Creiamo i pulsanti per le prescrizioni
+    keyboard = []
+    
+    for idx, prescription in enumerate(user_prescriptions):
+        desc = prescription.get("description", "Prescrizione")
+        fiscal_code = prescription["fiscal_code"]
+        nre = prescription["nre"]
+        
+        # Controlliamo lo stato attuale delle notifiche
+        notifications_enabled = prescription.get("notifications_enabled", True)
+        status = "🔔 ON" if notifications_enabled else "🔕 OFF"
+        
+        # Creiamo un pulsante con identificativo della prescrizione
+        keyboard.append([
+            InlineKeyboardButton(
+                f"{idx+1}. {desc[:25]}... ({status})",
+                callback_data=f"toggle_{idx}"
+            )
+        ])
+    
+    # Aggiungiamo un pulsante per annullare
+    keyboard.append([InlineKeyboardButton("❌ Annulla", callback_data="cancel_toggle")])
+    
+    # Salviamo le prescrizioni nei dati dell'utente
+    user_data[user_id] = {
+        "action": "toggle_notifications",
+        "prescriptions": user_prescriptions
+    }
+    
+    await update.message.reply_text(
+        "Seleziona la prescrizione per cui vuoi attivare/disattivare le notifiche:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    
+    return WAITING_FOR_PRESCRIPTION_TO_TOGGLE
+
+async def handle_prescription_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gestisce la selezione della prescrizione per cui attivare/disattivare le notifiche."""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    callback_data = query.data
+    
+    if callback_data == "cancel_toggle":
+        await query.edit_message_text("❌ Operazione annullata.")
+        # Puliamo i dati dell'utente
+        user_data.pop(user_id, None)
+        return ConversationHandler.END
+    
+    # Estraiamo l'indice della prescrizione
+    idx = int(callback_data.split("_")[1])
+    user_prescriptions = user_data[user_id]["prescriptions"]
+    
+    # Controlliamo che l'indice sia valido
+    if idx < 0 or idx >= len(user_prescriptions):
+        await query.edit_message_text("⚠️ Prescrizione non valida.")
+        user_data.pop(user_id, None)
+        return ConversationHandler.END
+    
+    # Otteniamo la prescrizione
+    prescription_to_toggle = user_prescriptions[idx]
+    
+    # Carichiamo tutte le prescrizioni
+    all_prescriptions = load_input_data()
+    
+    # Cerchiamo la prescrizione nel dataset completo
+    toggled = False
+    for prescription in all_prescriptions:
+        if (prescription["fiscal_code"] == prescription_to_toggle["fiscal_code"] and 
+            prescription["nre"] == prescription_to_toggle["nre"]):
+            
+            # Otteniamo lo stato attuale e lo invertiamo
+            current_state = prescription.get("notifications_enabled", True)
+            prescription["notifications_enabled"] = not current_state
+            
+            toggled = True
+            new_state = prescription["notifications_enabled"]
+            break
+    
+    if toggled:
+        # Salviamo le prescrizioni aggiornate
+        save_input_data(all_prescriptions)
+        
+        # Stato da visualizzare nel messaggio
+        status_text = "attivate ✅" if new_state else "disattivate ❌"
+        
+        # Aggiorniamo il messaggio
+        await query.edit_message_text(
+            f"✅ Notifiche {status_text} per:\n\n"
+            f"Descrizione: {prescription_to_toggle.get('description', 'Non disponibile')}\n"
+            f"Codice Fiscale: {prescription_to_toggle['fiscal_code']}\n"
+            f"NRE: {prescription_to_toggle['nre']}"
+        )
+    else:
+        await query.edit_message_text("⚠️ Impossibile modificare lo stato delle notifiche.")
+    
+    # Puliamo i dati dell'utente
+    user_data.pop(user_id, None)
+    
+    return ConversationHandler.END
 
 async def start_monitoring():
     """Avvia il thread di monitoraggio delle prescrizioni."""
@@ -789,11 +924,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.warning(f"Tentativo di accesso non autorizzato da {user_id}")
         return
     
-    # Creiamo una tastiera personalizzata
+    # Creiamo una tastiera personalizzata con il nuovo pulsante per le notifiche
     keyboard = [
         ["➕ Aggiungi Prescrizione", "➖ Rimuovi Prescrizione"],
         ["📋 Lista Prescrizioni", "🔄 Verifica Disponibilità"],
-        ["ℹ️ Informazioni", "🔑 Autorizza Utente"]
+        ["🔔 Gestisci Notifiche", "ℹ️ Informazioni"],
+        ["🔑 Autorizza Utente"]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
@@ -947,11 +1083,12 @@ async def confirm_add_prescription(update: Update, context: ContextTypes.DEFAULT
     # Carichiamo le prescrizioni esistenti
     prescriptions = load_input_data()
     
-    # Creiamo la nuova prescrizione
+    # Creiamo la nuova prescrizione con notifiche abilitate
     new_prescription = {
         "fiscal_code": fiscal_code,
         "nre": nre,
         "telegram_chat_id": user_id,
+        "notifications_enabled": True,  # Inizializziamo le notifiche come abilitate
         "config": {
             "only_new_dates": True,
             "notify_removed": False,
@@ -976,13 +1113,6 @@ async def confirm_add_prescription(update: Update, context: ContextTypes.DEFAULT
     logger.info(f"Totale prescrizioni: {len(prescriptions)}")
     
     save_input_data(prescriptions)
-    
-    # Verifica subito che il salvataggio abbia funzionato
-    try:
-        test_prescriptions = load_input_data()
-        logger.info(f"Verifica dopo il salvataggio: {len(test_prescriptions)} prescrizioni presenti")
-    except Exception as e:
-        logger.error(f"Errore nel verificare il salvataggio: {str(e)}")
     save_previous_data(previous_data)
     
     # Aggiorniamo il messaggio
@@ -998,7 +1128,7 @@ async def confirm_add_prescription(update: Update, context: ContextTypes.DEFAULT
     user_data.pop(user_id, None)
     
     return ConversationHandler.END
-
+    
 async def remove_prescription(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Gestisce la rimozione di una prescrizione."""
     user_id = update.effective_user.id
@@ -1153,6 +1283,10 @@ async def list_prescriptions(update: Update, context: ContextTypes.DEFAULT_TYPE)
         fiscal_code = prescription["fiscal_code"]
         nre = prescription["nre"]
         
+        # Mostriamo lo stato delle notifiche
+        notifications_enabled = prescription.get("notifications_enabled", True)
+        notification_status = "🔔 attive" if notifications_enabled else "🔕 disattivate"
+        
         # Aggiungiamo informazioni sull'utente se l'admin sta visualizzando
         user_info = ""
         if is_admin and "telegram_chat_id" in prescription:
@@ -1160,9 +1294,11 @@ async def list_prescriptions(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         message += f"{idx+1}. <b>{desc}</b>{user_info}\n"
         message += f"   Codice Fiscale: <code>{fiscal_code}</code>\n"
-        message += f"   NRE: <code>{nre}</code>\n\n"
+        message += f"   NRE: <code>{nre}</code>\n"
+        message += f"   Notifiche: {notification_status}\n\n"
     
     await update.message.reply_text(message, parse_mode="HTML")
+    
 
 async def check_availability(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Verifica immediatamente la disponibilità delle prescrizioni."""
@@ -1243,7 +1379,8 @@ async def show_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "➕ <b>Aggiungi Prescrizione</b> - Monitora una nuova prescrizione\n"
         "➖ <b>Rimuovi Prescrizione</b> - Smetti di monitorare una prescrizione\n"
         "📋 <b>Lista Prescrizioni</b> - Visualizza le prescrizioni monitorate\n"
-        "🔄 <b>Verifica Disponibilità</b> - Controlla subito le disponibilità\n\n"
+        "🔄 <b>Verifica Disponibilità</b> - Controlla subito le disponibilità\n"
+        "🔔 <b>Gestisci Notifiche</b> - Attiva/disattiva notifiche per una prescrizione\n\n"
         "<b>Frequenza di controllo:</b> Ogni 5 minuti\n\n"
         "<b>Note:</b>\n"
         "• Il bot notifica solo quando ci sono cambiamenti significativi\n"
@@ -1323,7 +1460,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard = [
                 ["➕ Aggiungi Prescrizione", "➖ Rimuovi Prescrizione"],
                 ["📋 Lista Prescrizioni", "🔄 Verifica Disponibilità"],
-                ["ℹ️ Informazioni", "🔑 Autorizza Utente"]
+                ["🔔 Gestisci Notifiche", "ℹ️ Informazioni"],
+                ["🔑 Autorizza Utente"]
             ]
             reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
             
@@ -1349,20 +1487,25 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await list_prescriptions(update, context)
     elif text == "🔄 Verifica Disponibilità":
         return await check_availability(update, context)
+    elif text == "🔔 Gestisci Notifiche":
+        return await toggle_notifications(update, context)
     elif text == "ℹ️ Informazioni":
         return await show_info(update, context)
     elif text == "🔑 Autorizza Utente":
         return await authorize_user(update, context)
     else:
-        # Messaggio di default
+        # Messaggio di default con la tastiera aggiornata
         await update.message.reply_text(
             "Usa i pulsanti sotto per interagire con il bot.",
             reply_markup=ReplyKeyboardMarkup([
                 ["➕ Aggiungi Prescrizione", "➖ Rimuovi Prescrizione"],
                 ["📋 Lista Prescrizioni", "🔄 Verifica Disponibilità"],
-                ["ℹ️ Informazioni", "🔑 Autorizza Utente"]
+                ["🔔 Gestisci Notifiche", "ℹ️ Informazioni"],
+                ["🔑 Autorizza Utente"]
             ], resize_keyboard=True)
         )
+
+
 async def error_handler(update, context):
     """Gestisce gli errori del bot."""
     logger.error(f"Errore nell'update {update}: {context.error}")
@@ -1376,7 +1519,6 @@ async def error_handler(update, context):
 
 application = None  # Dichiarazione globale
 
-# Modifica la funzione main()
 def main():
     """Funzione principale che avvia il bot."""
     global application  # Importante! Usa la variabile globale
@@ -1413,6 +1555,9 @@ def main():
             ],
             WAITING_FOR_PRESCRIPTION_TO_DELETE: [
                 CallbackQueryHandler(handle_prescription_to_delete)
+            ],
+            WAITING_FOR_PRESCRIPTION_TO_TOGGLE: [
+                CallbackQueryHandler(handle_prescription_toggle)
             ]
         },
         fallbacks=[
@@ -1454,6 +1599,7 @@ def main():
         logger.info("Bot interrotto dall'utente")
     except Exception as e:
         logger.error(f"Errore nell'avvio del bot: {str(e)}")
+
 
 if __name__ == "__main__":
     # Importazioni necessarie per asyncio
