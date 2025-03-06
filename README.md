@@ -1,6 +1,19 @@
 # Lazio Health Monitor Bot
 
-Con questo bot telegram verrai notificato e terrai traccia delle disponibilità di appuntamenti con il SSN nella regione Lazio.
+Un bot Telegram che monitora automaticamente le disponibilità del Servizio Sanitario Nazionale nella Regione Lazio e invia notifiche quando sono disponibili nuovi appuntamenti.
+
+![Banner](https://img.shields.io/badge/Regione-Lazio-green)
+![Python](https://img.shields.io/badge/Python-3.7+-blue)
+![License](https://img.shields.io/badge/License-MIT-yellow)
+
+## 📋 Caratteristiche
+
+- 🔍 **Monitoraggio automatico**: Controlla le disponibilità ogni 5 minuti
+- 🔔 **Notifiche istantanee**: Ricevi avvisi quando ci sono nuovi appuntamenti
+- 👥 **Sistema multi-utente**: Gestione di utenti autorizzati
+- 📱 **Interfaccia intuitiva**: Tastiera personalizzata per una facile interazione
+- 📊 **Dettagli completi**: Visualizza ospedali, date, orari e costi
+- 🔐 **Accesso sicuro**: Solo gli utenti autorizzati possono utilizzare il bot
 
 # Guida all'installazione del servizio di monitoraggio prenotazioni mediche
 
@@ -8,9 +21,14 @@ Questa guida ti aiuterà a configurare il servizio di monitoraggio delle prenota
 
 ## Prerequisiti
 
-- Raspberry Pi con Raspbian/Raspberry Pi OS installato
-- Connessione a Internet
-- Un bot Telegram (dovrai crearne uno)
+- Python 3.7+
+- `python-telegram-bot` (v20.0+)
+- `requests`
+
+```bash
+# Installa le dipendenze
+pip install python-telegram-bot requests
+```
 
 ## Passaggio 1: Creare un bot Telegram
 
@@ -21,166 +39,111 @@ Questa guida ti aiuterà a configurare il servizio di monitoraggio delle prenota
 5. Avvia una chat con il tuo nuovo bot
 6. Per ottenere il tuo ID chat, cerca "@userinfobot" su Telegram e invia un messaggio qualsiasi
 
-## Passaggio 2: Preparare il Raspberry Pi
+## Configurazione
 
-1. Aggiorna il sistema:
-   ```
-   sudo apt-get update
-   sudo apt-get upgrade
-   ```
-
-2. Installa le dipendenze necessarie:
-   ```
-   sudo apt-get install python3-pip
-   pip3 install requests
-   ```
-
-## Passaggio 3: Configurare il servizio
-
-1. Crea una directory per il servizio:
-   ```
-   mkdir -p /home/pi/recup-monitor
-   cd /home/pi/recup-monitor
-   ```
-
-2. Crea il file Python principale:
-   ```
-   nano recup_monitor.py
-   ```
-   
-3. Copia e incolla il codice dal file `recup_monitor.py` fornito
-
-4. Modifica le seguenti variabili nel file:
-   - `TELEGRAM_TOKEN`: inserisci il token del tuo bot Telegram
-
-5. Salva il file (Ctrl+O, quindi Invio, poi Ctrl+X)
-
-6. Crea il file di input:
-   ```
-   nano input_prescriptions.json
-   ```
-
-7. Incolla il contenuto del file di esempio e modifica i dati con le tue prescrizioni:
-   ```json
-   [
-      {
-      "fiscal_code": "RSSMRA80A01H501Z",
-      "nre": "1200A5555555555",
-      "telegram_chat_id": "123456789",
-      "config": {
-            "only_new_dates": false,
-            "notify_removed": true,
-            "min_changes_to_notify": 1,
-            "time_threshold_minutes": 30,
-            "show_all_current": false
-         }
-      }
-   ]
-   ```
-
-   ### Parametri di configurazione
-
-   #### Parametri principali
-   | Parametro | Tipo | Descrizione |
-   |-----------|------|-------------|
-   | `fiscal_code` | String | Codice fiscale del paziente |
-   | `nre` | String | Numero di Ricetta Elettronica da monitorare |
-   | `telegram_chat_id` | String | ID della chat Telegram a cui inviare le notifiche per questa prescrizione specifica |
-
-   ### Opzioni di configurazione (`config`)
-   | Opzione | Tipo | Default | Descrizione |
-   |---------|------|---------|-------------|
-   | `only_new_dates` | Boolean | `true` | Se `true`, riceverai notifiche solo per nuove disponibilità (non per rimozioni o cambiamenti di prezzo) |
-   | `notify_removed` | Boolean | `false` | Se `true`, riceverai notifiche quando le disponibilità vengono rimosse |
-   | `min_changes_to_notify` | Number | `2` | Numero minimo di cambiamenti prima di inviare una notifica |
-   | `time_threshold_minutes` | Number | `60` | Minuti entro cui considerare due appuntamenti come lo stesso spostato di orario |
-   | `show_all_current` | Boolean | `true` | Se `true`, il messaggio includerà tutte le disponibilità attuali, non solo le nuove |
-
-
-
-8. Salva il file (Ctrl+O, quindi Invio, poi Ctrl+X)
-
-## Passaggio 4: Configurare il servizio systemd
-
-1. Crea il file di servizio systemd:
-   ```
-   sudo nano /etc/systemd/system/recup-monitor.service
-   ```
-
-2. Copia e incolla il contenuto di:
-    ```
-    [Unit]
-    Description=Recup Monitor Service
-    After=network.target
-
-    [Service]
-    Type=simple
-    User=pi
-    WorkingDirectory=/home/pi/home-automation-api/recup/
-    ExecStart=/usr/bin/python3 /home/pi/home-automation-api/recup/recup_monitor.py
-    Restart=on-failure
-    RestartSec=10
-    StandardOutput=syslog
-    StandardError=syslog
-    SyslogIdentifier=recup-monitor
-
-    [Install]
-    WantedBy=multi-user.target
-    ```
-
-3. Salva il file (Ctrl+O, quindi Invio, poi Ctrl+X)
-
-4. Abilita e avvia il servizio:
-   ```
-   sudo systemctl daemon-reload
-   sudo systemctl enable recup-monitor.service
-   sudo systemctl start recup-monitor.service
-   ```
-
-5. Verifica che il servizio sia in esecuzione:
-   ```
-   sudo systemctl status recup-monitor.service
-   ```
-
-## Passaggio 5: Monitoraggio e manutenzione
-
-### Per controllare i log del servizio:
-```
-sudo journalctl -u recup-monitor.service
+1. Clona il repository:
+```bash
+git clone https://github.com/yourusername/ssn-telegram-bot.git
+cd ssn-telegram-bot
 ```
 
-### Per vedere solo gli ultimi log:
-```
-sudo journalctl -u recup-monitor.service -f
-```
+2. Configura il bot:
+   - Modifica il token Telegram nel file `recup_monitor.py`
+   - Personalizza altre impostazioni se necessario
 
-### Per riavviare il servizio dopo modifiche:
-```
-sudo systemctl restart recup-monitor.service
-```
-
-### Per aggiornare le prescrizioni da monitorare:
-Modifica il file `input_prescriptions.json` con le nuove prescrizioni che desideri monitorare.
-
-## Funzionamento del servizio
-
-Il servizio eseguirà le seguenti operazioni ogni 5 minuti:
-
-1. Leggerà il file `input_prescriptions.json` per ottenere i codici fiscali e i numeri NRE da monitorare
-2. Per ogni prescrizione, verificherà le disponibilità mediche
-3. Confronterà le disponibilità attuali con quelle precedenti
-4. Se ci sono cambiamenti (nuove disponibilità, disponibilità rimosse o prezzi cambiati), invierà una notifica su Telegram
-5. Salverà i dati attuali per il confronto successivo
-
-## Risoluzione dei problemi
-
-### Il servizio non si avvia
-Controlla i log di sistema:
-```
-sudo journalctl -u recup-monitor.service
+3. Esegui il bot:
+```bash
+python recup_monitor.py
 ```
 
-### Non ricevo notifiche Telegram
-1. Verifica di aver inserito correttamente il token del bot e l'ID chat
-2. Assicurati di aver avviato una chat con il tuo bot
-3. Controlla i log per eventuali errori nelle chiamate API Telegram
+## 🚀 Utilizzo
+
+### Comandi principali
+
+- `/start` - Avvia il bot e mostra il menu principale
+- `/cancel` - Annulla l'operazione corrente
+
+### Menu del bot
+
+- **➕ Aggiungi Prescrizione** - Aggiungi una nuova prescrizione da monitorare
+- **➖ Rimuovi Prescrizione** - Smetti di monitorare una prescrizione
+- **📋 Lista Prescrizioni** - Visualizza le prescrizioni in monitoraggio
+- **🔄 Verifica Disponibilità** - Controlla immediatamente le disponibilità
+- **ℹ️ Informazioni** - Mostra informazioni sul bot
+- **🔑 Autorizza Utente** - (Solo admin) Autorizza nuovi utenti ad utilizzare il bot
+
+### Come aggiungere una prescrizione
+
+1. Seleziona "➕ Aggiungi Prescrizione"
+2. Inserisci il codice fiscale del paziente
+3. Inserisci il codice NRE (Numero Ricetta Elettronica)
+4. Conferma l'aggiunta
+
+Il bot verificherà la validità della prescrizione e inizierà a monitorarla automaticamente.
+
+## 🔒 Gestione degli utenti
+
+Il bot implementa un sistema di autorizzazione:
+
+- Il primo utente che interagisce con il bot diventa automaticamente l'amministratore
+- Solo l'amministratore può autorizzare nuovi utenti
+- Gli utenti non autorizzati non possono utilizzare il bot
+
+Per autorizzare un nuovo utente:
+1. L'amministratore seleziona "🔑 Autorizza Utente"
+2. Inserisce l'ID Telegram dell'utente da autorizzare
+3. L'utente autorizzato può ora utilizzare il bot
+
+## 📁 Struttura dei file
+
+- `recup_monitor.py` - File principale del bot
+- `input_prescriptions.json` - Salva le prescrizioni monitorate
+- `previous_data.json` - Memorizza i dati delle disponibilità precedenti
+- `authorized_users.json` - Elenco degli utenti autorizzati
+
+### Parametri di configurazione
+
+#### Parametri principali
+| Parametro | Tipo | Descrizione |
+|-----------|------|-------------|
+| `fiscal_code` | String | Codice fiscale del paziente |
+| `nre` | String | Numero di Ricetta Elettronica da monitorare |
+| `telegram_chat_id` | String | ID della chat Telegram a cui inviare le notifiche per questa prescrizione specifica |
+
+### Opzioni di configurazione (`config`)
+| Opzione | Tipo | Default | Descrizione |
+|---------|------|---------|-------------|
+| `only_new_dates` | Boolean | `true` | Se `true`, riceverai notifiche solo per nuove disponibilità (non per rimozioni o cambiamenti di prezzo) |
+| `notify_removed` | Boolean | `false` | Se `true`, riceverai notifiche quando le disponibilità vengono rimosse |
+| `min_changes_to_notify` | Number | `2` | Numero minimo di cambiamenti prima di inviare una notifica |
+| `time_threshold_minutes` | Number | `60` | Minuti entro cui considerare due appuntamenti come lo stesso spostato di orario |
+| `show_all_current` | Boolean | `true` | Se `true`, il messaggio includerà tutte le disponibilità attuali, non solo le nuove |
+
+## 📝 Note tecniche
+
+Il bot utilizza l'API non ufficiale del sistema RecUP della Regione Lazio. Effettua le seguenti operazioni:
+
+1. Ottiene un token di accesso
+2. Verifica i dati del paziente e della prescrizione
+3. Ottiene le disponibilità per la prescrizione
+4. Confronta con le disponibilità precedenti
+5. Invia notifiche quando ci sono nuovi appuntamenti
+
+## 🔧 Risoluzione dei problemi
+
+- **Errore di autorizzazione**: Assicurati che il tuo ID Telegram sia nella lista degli utenti autorizzati.
+- **Nessun appuntamento trovato**: Verifica che il codice fiscale e l'NRE siano corretti.
+- **Bot non risponde**: Riavvia il bot e controlla i log per eventuali errori.
+- **Errori nei file**: Usa il comando `/debug` per verificare lo stato dei file di sistema.
+
+## 📜 Licenza
+
+Questo progetto è rilasciato sotto licenza MIT. Vedi il file [LICENSE](LICENSE) per i dettagli.
+
+## 📞 Contatti
+
+Per domande, suggerimenti o segnalazioni di bug, apri un issue su GitHub o contattami direttamente.
+
+---
+
+⚠️ **Disclaimer**: Questo bot utilizza un'API non ufficiale del sistema RecUP della Regione Lazio. È stato creato solo per scopi personali e educativi. L'utilizzo del bot è a tuo rischio e pericolo. L'autore non è responsabile per eventuali problemi derivanti dall'utilizzo di questo software.
