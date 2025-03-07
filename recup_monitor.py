@@ -388,7 +388,7 @@ def is_similar_datetime(date1_str, date2_str, minutes_threshold=30):
     except Exception:
         return False
 
-def compare_availabilities(previous, current, fiscal_code, nre, prescription_name="", config=None):
+def compare_availabilities(previous, current, fiscal_code, nre, prescription_name="", cf_code = "",config=None):
     """Compare previous and current availabilities with configuration per prescrizione."""
     # Configurazione predefinita se non specificata
     default_config = {
@@ -416,6 +416,7 @@ def compare_availabilities(previous, current, fiscal_code, nre, prescription_nam
 <b>🔍 Nuova Prescrizione</b>
 
 <b>Codice Fiscale:</b> <code>{fiscal_code}</code>
+<b>ID Tessera Sanitaria:</b> <code>{cf_code}</code>
 <b>NRE:</b> <code>{nre}</code>
 <b>Descrizione:</b> <code>{prescription_name}</code>
 
@@ -543,6 +544,7 @@ def compare_availabilities(previous, current, fiscal_code, nre, prescription_nam
 <b>🔍 Aggiornamento Prescrizione</b>
 
 <b>Codice Fiscale:</b> <code>{fiscal_code}</code>
+<b>ID Tessera Sanitaria:</b> <code>{cf_code}</code>
 <b>NRE:</b> <code>{nre}</code>
 <b>Descrizione:</b> <code>{prescription_name}</code>
 """
@@ -648,6 +650,86 @@ def process_prescription(prescription, previous_data, chat_id=None):
         error_msg = f"Impossibile trovare informazioni per il paziente {fiscal_code}"
         logger.error(error_msg)
         return False, error_msg
+        
+    # Carichiamo tutte le prescrizioni
+    all_prescriptions = load_input_data()
+    cf_code = ""
+    
+    try:
+        # Flag per verificare se abbiamo trovato e aggiornato la prescrizione
+        prescription_updated = False
+        
+        # Cerchiamo e aggiorniamo la prescrizione specifica
+        for prescription in all_prescriptions:
+            if (prescription["fiscal_code"] == fiscal_code and 
+                prescription["nre"] == nre):
+                
+                # Verifichiamo che ci siano informazioni del paziente valide
+                if patient_info and 'content' in patient_info and patient_info['content']:
+                    patient_details = patient_info['content'][0]
+                    
+                    # Creiamo un dizionario dettagliato e pulito
+                    patient_info_dict = {
+                        "firstName": patient_details.get("firstName", "N/A"),
+                        "lastName": patient_details.get("lastName", "N/A"),
+                        "birthDate": patient_details.get("birthDate", "N/A"),
+                        
+                        # Codice della tessera sanitaria con gestione più robusta
+                        "teamCard": {
+                            "code": patient_details.get("teamCard", {}).get("code", "N/A"),
+                            "validFrom": patient_details.get("teamCard", {}).get("startDate", "N/A"),
+                            "validTo": patient_details.get("teamCard", {}).get("endDate", "N/A")
+                        },
+                        
+                        # Residenza con gestione degli attributi mancanti
+                        "residence": " ".join(filter(bool, [
+                            patient_details.get('residence', {}).get('address', ''),
+                            patient_details.get('residence', {}).get('streetNumber', ''),
+                            patient_details.get('residence', {}).get('postalCode', ''),
+                            patient_details.get('residence', {}).get('town', {}).get('name', ''),
+                            patient_details.get('residence', {}).get('province', {}).get('id', '')
+                        ])).strip() or "N/A",
+                        
+                        # Domicilio con gestione degli attributi mancanti
+                        "domicile": " ".join(filter(bool, [
+                            patient_details.get('domicile', {}).get('address', ''),
+                            patient_details.get('domicile', {}).get('streetNumber', ''),
+                            patient_details.get('domicile', {}).get('postalCode', ''),
+                            patient_details.get('domicile', {}).get('town', {}).get('name', ''),
+                            patient_details.get('domicile', {}).get('province', {}).get('id', '')
+                        ])).strip() or "N/A",
+                        
+                        # Informazioni aggiuntive
+                        "birthPlace": f"{patient_details.get('birthPlace', {}).get('name', 'N/A')}, "
+                                      f"{patient_details.get('birthProvince', {}).get('id', 'N/A')}",
+                        
+                        "citizenship": patient_details.get('citizenship', {}).get('name', 'N/A')
+                    }
+                    
+                    cf_code = patient_details.get("teamCard", {}).get("code", "")
+                    
+                    # Aggiungiamo le informazioni del paziente
+                    prescription["patient_info"] = patient_info_dict
+                    
+                    # Logghiamo l'aggiornamento
+                    logger.info(f"Aggiornate informazioni paziente per prescrizione NRE: {nre}")
+                    
+                    # Impostiamo il flag di aggiornamento
+                    prescription_updated = True
+                
+                break  # Usciamo dal ciclo dopo aver trovato la prescrizione
+        
+        # Salviamo solo se abbiamo effettivamente aggiornato qualcosa
+        if prescription_updated:
+            save_input_data(all_prescriptions)
+            logger.info(f"Salvate informazioni paziente per prescrizione NRE: {nre}")
+        else:
+            logger.warning(f"Nessuna prescrizione trovata per aggiornamento: {fiscal_code}, {nre}")
+    
+    except Exception as e:
+        # Catturiamo e logghiamo eventuali errori durante l'aggiornamento
+        logger.error(f"Errore durante l'aggiornamento delle informazioni paziente: {str(e)}")
+    
     
     patient_id = patient_info['content'][0]['id']
     
@@ -692,7 +774,7 @@ def process_prescription(prescription, previous_data, chat_id=None):
     # Step 7: Get availabilities
     availabilities = get_availabilities(patient_id, process_id, nre, order_ids)
     if not availabilities or 'content' not in availabilities:
-        error_msg = f"Impossibile ottenere le disponibilità per {nre}"
+        error_msg = f"Impossibile ottenere le disponibilità per {nre}, sei sicuro che non sia già prenotata?"
         logger.error(error_msg)
         return False, error_msg
     
@@ -708,6 +790,7 @@ def process_prescription(prescription, previous_data, chat_id=None):
         fiscal_code,
         nre,
         prescription_name,
+        cf_code,
         config
     )
     
@@ -794,7 +877,6 @@ async def toggle_notifications(update: Update, context: ContextTypes.DEFAULT_TYP
             )
         ])
     
-    # Aggiungiamo un pulsante per annullare
     keyboard.append([InlineKeyboardButton("❌ Annulla", callback_data="cancel_toggle")])
     
     # Salviamo le prescrizioni nei dati dell'utente
