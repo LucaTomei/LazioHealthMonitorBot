@@ -1,5 +1,4 @@
-import asyncio
-import logging
+import asyncio, logging, json, os
 
 # Importiamo le variabili globali e funzioni da altri moduli
 from recup_monitor import logger, TELEGRAM_TOKEN  # Importa il token Telegram
@@ -13,6 +12,9 @@ from modules.data_utils import (
     load_input_data, save_input_data, is_date_within_range,
     is_similar_datetime, format_date
 )
+
+from modules.locations_db import update_location_db
+
 
 def compare_availabilities(previous, current, fiscal_code, nre, prescription_name="", cf_code="", config=None):
     """Compare previous and current availabilities with configuration per prescrizione."""
@@ -449,6 +451,24 @@ def process_prescription(prescription, previous_data, chat_id=None):
     
     current_availabilities = availabilities['content']
     
+    # *** In questo punto aggiorniamo il database delle location ***
+    if os.path.exists("locations.json"):
+        with open("locations.json", "r") as f:
+            locations_db = json.load(f)
+    else:
+        locations_db = {}
+        
+    for slot in current_availabilities:
+        hospital_info = slot.get("hospital", {})
+        site_info = slot.get("site", {})
+        hospital_name = hospital_info.get("name", "Sconosciuto")
+        address = site_info.get("address", "Indirizzo non disponibile")
+        update_location_db(hospital_name, address, locations_db)
+    
+    # Salva le modifiche sul file JSON
+    with open("locations.json", "w") as f:
+        json.dump(locations_db, f, indent=2)
+    
     # Compare with previous data to detect changes
     previous_availabilities = previous_data.get(prescription_key, [])
     
@@ -496,4 +516,118 @@ def process_prescription(prescription, previous_data, chat_id=None):
     # Update previous data for next comparison
     previous_data[prescription_key] = current_availabilities
     
+    auto_book_enabled = prescription.get("auto_book_enabled", False)
+    
+    # Se ci sono disponibilità e la prenotazione automatica è abilitata
+    if auto_book_enabled and current_availabilities:
+        # Verifichiamo se la prescrizione ha i dati di contatto necessari
+        if "phone" in prescription and "email" in prescription:
+            try:
+                # Verifichiamo che la prescrizione non sia già prenotata
+                if not any(booking.get("booking_id") for booking in prescription.get("bookings", [])):
+                    logger.info(f"Tentativo di prenotazione automatica per {prescription_key}")
+                    
+                    # Importiamo la funzione di prenotazione
+                    from modules.booking_client import booking_workflow
+                    
+                    # Avviamo il processo di prenotazione automatica
+                    result = booking_workflow(
+                        fiscal_code=fiscal_code,
+                        nre=nre,
+                        phone_number=prescription["phone"],
+                        email=prescription["email"],
+                        patient_id=patient_id,
+                        process_id=process_id,
+                        slot_choice=0  # Il primo slot disponibile
+                    )
+                    
+                    if result["success"] and result["action"] == "booked":
+                        # La prenotazione è andata a buon fine!
+                        logger.info(f"Prenotazione automatica riuscita per {prescription_key}!")
+                        
+                        # Formattare la data
+                        try:
+                            date_obj = datetime.strptime(result["appointment_date"], "%Y-%m-%dT%H:%M:%SZ")
+                            formatted_date = date_obj.strftime("%d/%m/%Y %H:%M")
+                        except:
+                            formatted_date = result["appointment_date"]
+                        
+                        # Inviamo una notifica all'utente
+                        booking_message = f"""
+<b>✅ Prenotazione Automatica Completata!</b>
+
+<b>Prescrizione:</b> {prescription_name}
+<b>Data:</b> {formatted_date}
+<b>Ospedale:</b> {result['hospital']}
+<b>Indirizzo:</b> {result['address']}
+<b>ID Prenotazione:</b> {result['booking_id']}
+
+La prenotazione è stata effettuata automaticamente. Controlla la tua email per conferma.
+"""
+                        # Utilizziamo il metodo normale invece di quello asincrono per evitare problemi
+                        import requests
+                        
+                        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+                        data = {
+                            "chat_id": telegram_chat_id,
+                            "text": booking_message,
+                            "parse_mode": "HTML"
+                        }
+                        
+                        response = requests.post(url, data=data, timeout=10)
+                        
+                        # Invio del PDF come documento
+                        url_document = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument"
+                        
+                        from io import BytesIO
+                        
+                        files = {
+                            'document': ('prenotazione.pdf', BytesIO(result['pdf_content']), 'application/pdf')
+                        }
+                        
+                        data_document = {
+                            "chat_id": telegram_chat_id,
+                            "caption": f"Documento di prenotazione per {prescription_name} del {formatted_date}"
+                        }
+                        
+                        requests.post(url_document, data=data_document, files=files, timeout=30)
+                        
+                        # Aggiorniamo la prescrizione per includere la prenotazione
+                        all_prescriptions = load_input_data()
+                        for p in all_prescriptions:
+                            if p["fiscal_code"] == fiscal_code and p["nre"] == nre:
+                                if "bookings" not in p:
+                                    p["bookings"] = []
+                                p["bookings"].append({
+                                    "booking_id": result["booking_id"],
+                                    "date": result["appointment_date"],
+                                    "hospital": result["hospital"],
+                                    "address": result["address"],
+                                    "service": prescription_name
+                                })
+                                
+                                # Disabilitiamo la prenotazione automatica dopo il successo
+                                p["auto_book_enabled"] = False
+                                
+                                break
+                        
+                        # Salviamo le modifiche
+                        save_input_data(all_prescriptions)
+                    elif result["success"] and result["action"] == "list_slots":
+                        # Ci sono slot disponibili, ma non è stata completata la prenotazione
+                        logger.info(f"Slot disponibili per {prescription_key}, prenotazione non completata")
+                    else:
+                        # Errore nella prenotazione
+                        logger.error(f"Errore nella prenotazione automatica per {prescription_key}: {result.get('message', 'Errore sconosciuto')}")
+            except Exception as e:
+                logger.error(f"Errore durante la prenotazione automatica: {str(e)}")
+    
+    # Update previous data for next comparison
+    previous_data[prescription_key] = current_availabilities
+    
     return True, prescription_name
+    
+    
+    
+    
+    
