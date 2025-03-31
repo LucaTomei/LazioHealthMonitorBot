@@ -23,7 +23,7 @@ BASE_URL = "https://recup-webapi-appmobile.regione.lazio.it"
 AUTH_HEADER = "Basic QVBQTU9CSUxFX1NQRUNJQUw6UGs3alVTcDgzbUh4VDU4NA=="
 
 # Configurazione Telegram
-TELEGRAM_TOKEN = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+TELEGRAM_TOKEN = ""
 
 # Percorso del file di input e dati precedenti
 INPUT_FILE = "input_prescriptions.json"
@@ -35,7 +35,8 @@ USERS_FILE = "authorized_users.json"
  WAITING_FOR_PRESCRIPTION_TO_DELETE, WAITING_FOR_PRESCRIPTION_TO_TOGGLE,
  WAITING_FOR_DATE_FILTER, WAITING_FOR_MONTHS_LIMIT, CONFIRM_DATE_FILTER,
  WAITING_FOR_BOOKING_CHOICE, WAITING_FOR_BOOKING_CONFIRMATION, WAITING_FOR_PHONE,
- WAITING_FOR_EMAIL, WAITING_FOR_SLOT_CHOICE, WAITING_FOR_BOOKING_TO_CANCEL) = range(14)
+ WAITING_FOR_EMAIL, WAITING_FOR_SLOT_CHOICE, WAITING_FOR_BOOKING_TO_CANCEL,
+ WAITING_FOR_AUTO_BOOK_CHOICE, AUTHORIZING) = range(16)  
 
 # Lista di utenti autorizzati
 authorized_users = []

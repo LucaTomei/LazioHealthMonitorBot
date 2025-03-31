@@ -2,6 +2,7 @@ import os
 import json
 import logging
 from datetime import datetime, timedelta
+import fcntl
 
 # Importa costanti e configurazioni dal modulo config
 from config import (
@@ -9,20 +10,68 @@ from config import (
     authorized_users
 )
 
+def load_authorized_users_with_lock():
+    """Carica gli utenti autorizzati dal file con lock."""
+    global authorized_users
+    try:
+        if os.path.exists(USERS_FILE):
+            with open(USERS_FILE, 'r') as f:
+                # Acquisiamo un lock condiviso per la lettura
+                fcntl.flock(f, fcntl.LOCK_SH)
+                try:
+                    loaded_users = json.load(f)
+                    if loaded_users:
+                        authorized_users.clear()
+                        authorized_users.extend(loaded_users)
+                        logger.info(f"Caricati {len(authorized_users)} utenti autorizzati")
+                finally:
+                    # Rilasciamo il lock
+                    fcntl.flock(f, fcntl.LOCK_UN)
+        else:
+            # Se il file non esiste, lo creiamo
+            with open(USERS_FILE, 'w') as f:
+                # Acquisiamo un lock esclusivo per la scrittura
+                fcntl.flock(f, fcntl.LOCK_EX)
+                try:
+                    json.dump(authorized_users, f)
+                finally:
+                    fcntl.flock(f, fcntl.LOCK_UN)
+            logger.info("Creato nuovo file di utenti autorizzati")
+    except Exception as e:
+        logger.error(f"Errore nel caricare gli utenti autorizzati: {str(e)}")
+
+def save_authorized_users_with_lock():
+    """Salva gli utenti autorizzati su file con lock."""
+    try:
+        with open(USERS_FILE, 'w') as f:
+            # Acquisiamo un lock esclusivo
+            fcntl.flock(f, fcntl.LOCK_EX)
+            try:
+                json.dump(authorized_users, f, indent=2)
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
+        logger.info("Utenti autorizzati salvati con successo")
+    except Exception as e:
+        logger.error(f"Errore nel salvare gli utenti autorizzati: {str(e)}")
+
 def load_authorized_users():
     """Carica gli utenti autorizzati dal file."""
     global authorized_users
     try:
         if os.path.exists(USERS_FILE):
             with open(USERS_FILE, 'r') as f:
-                authorized_users.clear()
-                authorized_users.extend(json.load(f))
-            logger.info(f"Caricati {len(authorized_users)} utenti autorizzati")
+                loaded_users = json.load(f)
+                if loaded_users:  # Verifichiamo che il file contenga utenti
+                    authorized_users.clear()  # Solo se abbiamo caricato utenti validi
+                    authorized_users.extend(loaded_users)
+                    logger.info(f"Caricati {len(authorized_users)} utenti autorizzati")
+                else:
+                    logger.warning("File utenti autorizzati vuoto, mantengo utenti esistenti")
         else:
-            # Se il file non esiste, lo creiamo con un array vuoto
+            # Se il file non esiste, lo creiamo con gli utenti attuali (se presenti)
             with open(USERS_FILE, 'w') as f:
-                json.dump([], f)
-            logger.info("Creato nuovo file di utenti autorizzati")
+                json.dump(authorized_users, f)
+            logger.info(f"Creato nuovo file con {len(authorized_users)} utenti autorizzati")
     except Exception as e:
         logger.error(f"Errore nel caricare gli utenti autorizzati: {str(e)}")
 

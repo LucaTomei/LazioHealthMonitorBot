@@ -164,6 +164,8 @@ def cancel_booking(booking_id):
     """
     Cancel a specific booking.
     """
+    logger.info(f"Tentativo di cancellazione prenotazione con ID: {booking_id}")
+    
     url = f"{BASE_URL}/api/v3/process-apis/booking-management/bookings"
     
     headers = {
@@ -177,7 +179,7 @@ def cancel_booking(booking_id):
         "Accept-Encoding": "gzip"
     }
     
-    # This payload structure is for the API
+    # Payload per la cancellazione
     payload = [{
         "reasonId": 4,  # Reason code for cancellation
         "bookingStatus": "ELIMINATA",
@@ -185,27 +187,28 @@ def cancel_booking(booking_id):
         "identifier": booking_id
     }]
     
-    response = requests.patch(url, headers=headers, json=payload, verify=False)
+    logger.info(f"Payload cancellazione: {payload}")
     
-    # Better error handling
-    if response.status_code != 200:
-        logger.error(f"Cancellation Error: Status Code {response.status_code}")
-        logger.error(f"Response content: {response.text}")
-        raise Exception(f"Booking cancellation failed with status code {response.status_code}")
+    try:
+        response = requests.patch(url, headers=headers, json=payload, verify=False)
+        
+        # Log della risposta
+        logger.info(f"Status code risposta: {response.status_code}")
+        logger.info(f"Contenuto risposta: {response.text[:500]}")  # Limitiamo per sicurezza
+        
+        if response.status_code != 200:
+            logger.error(f"Errore nella cancellazione: {response.status_code}")
+            logger.error(f"Risposta errore: {response.text}")
+            raise Exception(f"Cancellazione prenotazione fallita con codice {response.status_code}")
+        
+        result = response.json()
+        logger.info(f"Risposta JSON: {result}")
+        
+        return result
+    except Exception as e:
+        logger.error(f"Eccezione durante la cancellazione: {str(e)}")
+        raise
     
-    result = response.json()
-    
-    # Check if cancellation was successful using the results
-    if result and '_messages' in result:
-        if not result['_messages']:
-            logger.info("Booking successfully canceled")
-        else:
-            logger.warning(f"Cancellation may have issues: {result['_messages']}")
-    else:
-        logger.info("Booking canceled successfully")
-    
-    return result
-
 def booking_workflow(fiscal_code, nre, phone_number, email, patient_id=None, process_id=None, slot_choice=0):
     """
     Complete booking workflow - from checking availability to booking and downloading confirmation.
