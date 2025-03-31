@@ -21,7 +21,7 @@ from config import (
     WAITING_FOR_PRESCRIPTION_TO_DELETE, WAITING_FOR_PRESCRIPTION_TO_TOGGLE,
     WAITING_FOR_DATE_FILTER, WAITING_FOR_MONTHS_LIMIT, CONFIRM_DATE_FILTER,
     WAITING_FOR_BOOKING_CHOICE, WAITING_FOR_BOOKING_CONFIRMATION, WAITING_FOR_PHONE,
-    WAITING_FOR_EMAIL, WAITING_FOR_SLOT_CHOICE, WAITING_FOR_BOOKING_TO_CANCEL
+    WAITING_FOR_EMAIL, WAITING_FOR_SLOT_CHOICE, WAITING_FOR_BOOKING_TO_CANCEL, WAITING_FOR_AUTO_BOOK_CHOICE, AUTHORIZING
 )
 
 # Importiamo le funzioni da altri moduli
@@ -245,11 +245,98 @@ async def handle_nre(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_data.pop(user_id, None)
             return ConversationHandler.END
     
-    # Prepariamo la conferma
+    # Chiediamo all'utente il numero di telefono
+    await update.message.reply_text(
+        f"Codice NRE: {nre}\n\n"
+        f"Ora inserisci il tuo numero di telefono per eventuali prenotazioni automatiche:",
+        reply_markup=ReplyKeyboardMarkup([["❌ Annulla"]], resize_keyboard=True)
+    )
+    
+    return WAITING_FOR_PHONE
+
+async def handle_add_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gestisce l'input del numero di telefono durante l'aggiunta di prescrizione."""
+    user_id = update.effective_user.id
+    phone = update.message.text.strip()
+    
+    # Controlliamo se l'utente vuole annullare
+    if phone == "❌ Annulla" or phone.lower() == "/cancel":
+        return await cancel_operation(update, context)
+    
+    # Validazione base del numero di telefono (almeno 8 cifre)
+    if not re.match("^[0-9+]{8,15}$", phone):
+        await update.message.reply_text(
+            "⚠️ Il numero di telefono inserito non sembra valido. Deve contenere almeno 8 cifre.\n\n"
+            "Per favore, riprova:"
+        )
+        return WAITING_FOR_PHONE
+    
+    # Salviamo il numero di telefono
+    user_data[user_id]["phone"] = phone
+    
+    # Chiediamo l'email
+    await update.message.reply_text(
+        f"Numero di telefono: {phone}\n\n"
+        f"Ora inserisci la tua email per eventuali prenotazioni automatiche:",
+        reply_markup=ReplyKeyboardMarkup([["❌ Annulla"]], resize_keyboard=True)
+    )
+    
+    return WAITING_FOR_EMAIL
+
+async def handle_add_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gestisce l'input dell'email durante l'aggiunta di prescrizione."""
+    user_id = update.effective_user.id
+    email = update.message.text.strip()
+    
+    # Controlliamo se l'utente vuole annullare
+    if email == "❌ Annulla" or email.lower() == "/cancel":
+        return await cancel_operation(update, context)
+    
+    # Verifica che i dati dell'utente siano corretti
+    if user_id not in user_data:
+        await update.message.reply_text(
+            "⚠️ Si è verificato un errore nella sessione. Per favore, ricomincia l'operazione."
+        )
+        return ConversationHandler.END
+    
+    # Verifica che sia l'azione corretta
+    if user_data[user_id].get("action") != "add_prescription":
+        await update.message.reply_text(
+            "⚠️ Azione non corretta. Per favore, ricomincia l'operazione."
+        )
+        user_data.pop(user_id, None)
+        return ConversationHandler.END
+    
+    # Verifica che ci siano i dati necessari
+    if "fiscal_code" not in user_data[user_id] or "nre" not in user_data[user_id] or "phone" not in user_data[user_id]:
+        await update.message.reply_text(
+            "⚠️ Dati incompleti. Per favore, ricomincia l'operazione."
+        )
+        user_data.pop(user_id, None)
+        return ConversationHandler.END
+    
+    # Validazione base dell'email
+    if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
+        await update.message.reply_text(
+            "⚠️ L'email inserita non sembra valida.\n\n"
+            "Per favore, riprova:"
+        )
+        return WAITING_FOR_EMAIL
+    
+    # Salviamo l'email
+    user_data[user_id]["email"] = email
+    
+    # Otteniamo i dati necessari
+    fiscal_code = user_data[user_id]["fiscal_code"]
+    nre = user_data[user_id]["nre"]
+    phone = user_data[user_id]["phone"]
+    
     await update.message.reply_text(
         f"Stai per aggiungere una nuova prescrizione con i seguenti dati:\n\n"
         f"Codice Fiscale: {fiscal_code}\n"
-        f"NRE: {nre}\n\n"
+        f"NRE: {nre}\n"
+        f"Telefono: {phone}\n"
+        f"Email: {email}\n\n"
         f"Confermi?",
         reply_markup=InlineKeyboardMarkup([
             [
@@ -278,6 +365,10 @@ async def confirm_add_prescription(update: Update, context: ContextTypes.DEFAULT
     fiscal_code = user_data[user_id]["fiscal_code"]
     nre = user_data[user_id]["nre"]
     
+    # Otteniamo i dati di contatto
+    phone = user_data[user_id]["phone"]
+    email = user_data[user_id]["email"]
+    
     # Carichiamo le prescrizioni esistenti
     prescriptions = load_input_data()
     
@@ -287,6 +378,9 @@ async def confirm_add_prescription(update: Update, context: ContextTypes.DEFAULT
         "nre": nre,
         "telegram_chat_id": user_id,
         "notifications_enabled": True,  # Inizializziamo le notifiche come abilitate
+        "auto_book_enabled": False,     # Prenotazione automatica disabilitata di default
+        "phone": phone,                 # Aggiungiamo il telefono
+        "email": email,                 # Aggiungiamo l'email
         "config": {
             "only_new_dates": True,
             "notify_removed": False,
@@ -323,18 +417,20 @@ async def confirm_add_prescription(update: Update, context: ContextTypes.DEFAULT
         f"Riceverai notifiche quando saranno disponibili nuovi appuntamenti."
     )
     
-    # Suggerimento per il filtro date
+    # Suggerimento per la prenotazione automatica
     main_keyboard = ReplyKeyboardMarkup([
         ["➕ Aggiungi Prescrizione", "➖ Rimuovi Prescrizione"],
         ["📋 Lista Prescrizioni", "🔄 Verifica Disponibilità"],
         ["🔔 Gestisci Notifiche", "⏱ Imposta Filtro Date"],
-        ["ℹ️ Informazioni", "🔑 Autorizza Utente"]
+        ["🏥 Prenota", "🤖 Prenota Automaticamente"],
+        ["📝 Le mie Prenotazioni", "ℹ️ Informazioni"],
+        ["🔑 Autorizza Utente"]
     ], resize_keyboard=True)
     
     await context.bot.send_message(
         chat_id=user_id,
-        text="💡 Suggerimento: se cerchi appuntamenti entro un certo periodo, usa la funzione '⏱ Imposta Filtro Date' "
-             "per filtrare le notifiche solo per date utili.",
+        text="💡 Suggerimento: puoi attivare la prenotazione automatica usando la funzione '🤖 Prenota Automaticamente' "
+             "per prenotare automaticamente il primo slot disponibile.",
         reply_markup=main_keyboard
     )
     
@@ -342,7 +438,7 @@ async def confirm_add_prescription(update: Update, context: ContextTypes.DEFAULT
     user_data.pop(user_id, None)
     
     return ConversationHandler.END
-
+    
 # =============================================================================
 # GESTORI PRESCRIZIONI: RIMOZIONE
 # =============================================================================
@@ -509,9 +605,24 @@ async def list_prescriptions(update: Update, context: ContextTypes.DEFAULT_TYPE)
         notifications_enabled = prescription.get("notifications_enabled", True)
         notification_status = "🔔 attive" if notifications_enabled else "🔕 disattivate"
         
+        # Mostriamo lo stato della prenotazione automatica
+        auto_book_enabled = prescription.get("auto_book_enabled", False)
+        auto_book_status = "🤖 attiva" if auto_book_enabled else "🤖 disattivata"
+        
         # Mostriamo il limite di mesi se impostato
         months_limit = prescription.get("config", {}).get("months_limit")
         date_filter = f"⏱ entro {months_limit} mesi" if months_limit else "⏱ nessun filtro date"
+        
+        # Otteniamo il codice della tessera sanitaria se disponibile
+        team_card_code = ""
+        if "patient_info" in prescription and "teamCard" in prescription["patient_info"]:
+            team_card_code = prescription["patient_info"]["teamCard"].get("code", "")
+        
+        # Mostriamo i dati di contatto se presenti
+        contact_info = ""
+        if "phone" in prescription and "email" in prescription:
+            contact_info = f"   📞 Telefono: {prescription['phone']}\n"
+            contact_info += f"   📧 Email: {prescription['email']}\n"
         
         # Aggiungiamo informazioni sull'utente se l'admin sta visualizzando
         user_info = ""
@@ -521,10 +632,17 @@ async def list_prescriptions(update: Update, context: ContextTypes.DEFAULT_TYPE)
         message += f"{idx+1}. <b>{desc}</b>{user_info}\n"
         message += f"   Codice Fiscale: <code>{fiscal_code}</code>\n"
         message += f"   NRE: <code>{nre}</code>\n"
-        message += f"   Notifiche: {notification_status} | {date_filter}\n\n"
+        
+        # Aggiungiamo il codice della tessera sanitaria se disponibile
+        if team_card_code:
+            message += f"   Tessera Sanitaria: <code>{team_card_code}</code>\n"
+            
+        message += contact_info
+        message += f"   Notifiche: {notification_status} | {date_filter}\n"
+        message += f"   Prenotazione automatica: {auto_book_status}\n\n"
     
     await update.message.reply_text(message, parse_mode="HTML")
-
+    
 async def check_availability(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Verifica immediatamente la disponibilità delle prescrizioni."""
     user_id = update.effective_user.id
@@ -785,56 +903,83 @@ async def book_prescription(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return WAITING_FOR_BOOKING_CHOICE
 
 async def handle_booking_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Gestisce la selezione della prescrizione da prenotare."""
     query = update.callback_query
     await query.answer()
     
     user_id = query.from_user.id
-    callback_data = query.data
-    
-    if callback_data == "cancel_booking":
-        await query.edit_message_text("❌ Operazione annullata.")
-        # Puliamo i dati dell'utente
-        if user_id in user_data:
-            user_data.pop(user_id, None)
-        return ConversationHandler.END
-    
-    # Estraiamo l'indice della prescrizione
     try:
-        idx = int(callback_data.split("_")[1])
-        user_prescriptions = user_data.get(user_id, {}).get("prescriptions", [])
-        
-        # Controlliamo che l'indice sia valido
-        if idx < 0 or idx >= len(user_prescriptions):
-            await query.edit_message_text("⚠️ Prescrizione non valida.")
-            if user_id in user_data:
-                user_data.pop(user_id, None)
-            return ConversationHandler.END
-        
-        # Otteniamo la prescrizione
-        prescription_to_book = user_prescriptions[idx]
-        user_data[user_id]["selected_prescription"] = prescription_to_book
-        
-        # Ricaviamo la descrizione garantendo un valore default
-        description = prescription_to_book.get('description', '')
-        if not description:
-            description = f"Prescrizione {prescription_to_book['nre']}"
-        
-        # Chiediamo all'utente il numero di telefono
-        await query.edit_message_text(
-            f"Hai selezionato: {description}\n\n"
-            f"Per completare la prenotazione, ho bisogno di alcune informazioni di contatto.\n\n"
-            f"Inserisci il tuo numero di telefono:"
-        )
-        
-        return WAITING_FOR_PHONE
+        idx = int(query.data.split("_")[1])
     except Exception as e:
-        logger.error(f"Errore in handle_booking_choice: {str(e)}")
-        await query.edit_message_text("⚠️ Si è verificato un errore nella selezione della prescrizione.")
-        if user_id in user_data:
-            user_data.pop(user_id, None)
+        await query.edit_message_text("⚠️ Errore nella selezione della prescrizione.")
         return ConversationHandler.END
+
+    user_prescriptions = user_data.get(user_id, {}).get("prescriptions", [])
+    if idx < 0 or idx >= len(user_prescriptions):
+        await query.edit_message_text("⚠️ Prescrizione non valida.")
+        user_data.pop(user_id, None)
+        return ConversationHandler.END
+
+    prescription = user_prescriptions[idx]
+    user_data[user_id]["selected_prescription"] = prescription
+
+    # Se la prescrizione contiene già i dati di contatto, li usiamo
+    if prescription.get("phone") and prescription.get("email"):
+        user_data[user_id]["phone"] = prescription["phone"]
+        user_data[user_id]["email"] = prescription["email"]
+    else:
+        await query.edit_message_text(
+            f"Hai selezionato: {prescription.get('description', 'N/D')}\n\n"
+            "Inserisci il tuo numero di telefono:"
+        )
+        return WAITING_FOR_PHONE
+
+    # Invia subito un messaggio di attesa
+    waiting_message = await query.edit_message_text("🔍 Sto cercando le disponibilità...")
+
+    # Avvia il booking workflow per ottenere le disponibilità (slot_choice = -1 indica "mostra lista")
+    result = booking_workflow(
+        fiscal_code=prescription["fiscal_code"],
+        nre=prescription["nre"],
+        phone_number=user_data[user_id]["phone"],
+        email=user_data[user_id]["email"],
+        patient_id=None,
+        process_id=None,
+        slot_choice=-1  # Indica: "ritorna la lista degli slot"
+    )
+    
+    if result.get("success") and result.get("action") == "list_slots":
+        user_data[user_id]["booking_details"] = result
+        slots = result.get("slots", [])
+        if not slots:
+            await waiting_message.edit_text("⚠️ Nessuna disponibilità trovata per questa prescrizione.")
+            return ConversationHandler.END
+
+        # Costruiamo i pulsanti per gli slot disponibili
+        keyboard = []
+        from datetime import datetime
+        for slot in slots:
+            try:
+                date_obj = datetime.strptime(slot["date"], "%Y-%m-%dT%H:%M:%SZ")
+                formatted_date = date_obj.strftime("%d/%m/%Y %H:%M")
+            except Exception:
+                formatted_date = slot["date"]
+            keyboard.append([InlineKeyboardButton(
+                f"{formatted_date} - {slot['hospital']} ({slot['price']}€)",
+                callback_data=f"slot_{slot['index']}"
+            )])
+        keyboard.append([InlineKeyboardButton("❌ Annulla", callback_data="cancel_slot")])
         
+        await waiting_message.edit_text(
+            "📋 <b>Disponibilità trovate:</b>\nSeleziona lo slot desiderato:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+        return WAITING_FOR_SLOT_CHOICE
+    else:
+        await waiting_message.edit_text("⚠️ Errore nella ricerca delle disponibilità. Riprova.")
+        return ConversationHandler.END
+
+       
 async def handle_phone_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Gestisce l'input del numero di telefono."""
     user_id = update.effective_user.id
@@ -1276,6 +1421,7 @@ async def start_cancel_booking(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             
             # Otteniamo le prenotazioni dall'API
+            from modules.booking_client import get_user_bookings
             result = get_user_bookings(fiscal_code)
             
             if result["success"] and result["bookings"]:
@@ -1302,8 +1448,10 @@ async def start_cancel_booking(update: Update, context: ContextTypes.DEFAULT_TYP
     # Salviamo le prenotazioni nei dati dell'utente
     user_data[user_id] = {
         "action": "cancel_booking",
-        "bookings": all_bookings
+        "bookings": all_bookings  # Salviamo tutte le prenotazioni
     }
+    
+    logger.info(f"Trovate {len(all_bookings)} prenotazioni da mostrare per la cancellazione")
     
     # Creiamo i pulsanti per le prenotazioni
     keyboard = []
@@ -1313,7 +1461,8 @@ async def start_cancel_booking(update: Update, context: ContextTypes.DEFAULT_TYP
         try:
             date_obj = datetime.strptime(booking["date"], "%Y-%m-%dT%H:%M:%SZ")
             formatted_date = date_obj.strftime("%d/%m/%Y %H:%M")
-        except:
+        except Exception as e:
+            logger.error(f"Errore nella formattazione della data: {e}")
             formatted_date = booking["date"]
         
         keyboard.append([
@@ -1335,11 +1484,15 @@ async def start_cancel_booking(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def handle_booking_to_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Gestisce la selezione della prenotazione da disdire."""
+    logger.info("Entrato in handle_booking_to_cancel")
     query = update.callback_query
     await query.answer()
     
     user_id = query.from_user.id
     callback_data = query.data
+    
+    # Log per debug
+    logger.info(f"Callback ricevuta: {callback_data}")
     
     if callback_data == "cancel_cancel_book":
         await query.edit_message_text("❌ Operazione annullata.")
@@ -1347,52 +1500,72 @@ async def handle_booking_to_cancel(update: Update, context: ContextTypes.DEFAULT
         user_data.pop(user_id, None)
         return ConversationHandler.END
     
-    # Estraiamo l'indice della prenotazione
-    idx = int(callback_data.split("_")[2])
-    user_bookings = user_data[user_id]["bookings"]
-    
-    # Controlliamo che l'indice sia valido
-    if idx < 0 or idx >= len(user_bookings):
-        await query.edit_message_text("⚠️ Prenotazione non valida.")
-        user_data.pop(user_id, None)
-        return ConversationHandler.END
-    
-    # Otteniamo la prenotazione
-    booking_to_cancel = user_bookings[idx]
-    
-    # Formattiamo la data
     try:
-        date_obj = datetime.strptime(booking_to_cancel["date"], "%Y-%m-%dT%H:%M:%SZ")
-        formatted_date = date_obj.strftime("%d/%m/%Y %H:%M")
-    except:
-        formatted_date = booking_to_cancel["date"]
+        # Estraiamo l'indice della prenotazione
+        idx = int(callback_data.split("_")[2])
+        logger.info(f"Indice estratto: {idx}")
+        
+        if user_id not in user_data or "bookings" not in user_data[user_id]:
+            await query.edit_message_text("⚠️ Dati di prenotazione non trovati. Riprova.")
+            return ConversationHandler.END
+            
+        user_bookings = user_data[user_id]["bookings"]
+        
+        # Controlliamo che l'indice sia valido
+        if idx < 0 or idx >= len(user_bookings):
+            await query.edit_message_text("⚠️ Prenotazione non valida.")
+            user_data.pop(user_id, None)
+            return ConversationHandler.END
+        
+        # Otteniamo la prenotazione
+        booking_to_cancel = user_bookings[idx]
+        
+        # Formattiamo la data
+        try:
+            date_obj = datetime.strptime(booking_to_cancel["date"], "%Y-%m-%dT%H:%M:%SZ")
+            formatted_date = date_obj.strftime("%d/%m/%Y %H:%M")
+        except:
+            formatted_date = booking_to_cancel["date"]
+        
+        # Chiediamo conferma all'utente
+        await query.edit_message_text(
+            f"⚠️ <b>Sei sicuro di voler disdire questa prenotazione?</b>\n\n"
+            f"<b>Servizio:</b> {booking_to_cancel['service']}\n"
+            f"<b>Data:</b> {formatted_date}\n"
+            f"<b>Ospedale:</b> {booking_to_cancel['hospital']}\n"
+            f"<b>ID Prenotazione:</b> {booking_to_cancel['booking_id']}\n\n"
+            f"Questa operazione è <b>irreversibile</b>!",
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("✅ Sì, disdici", callback_data=f"confirm_cancel_{idx}"),
+                    InlineKeyboardButton("❌ No, annulla", callback_data="cancel_cancel_book")
+                ]
+            ]),
+            parse_mode="HTML"
+        )
+        
+        return WAITING_FOR_BOOKING_TO_CANCEL
     
-    # Chiediamo conferma all'utente
-    await query.edit_message_text(
-        f"⚠️ <b>Sei sicuro di voler disdire questa prenotazione?</b>\n\n"
-        f"<b>Servizio:</b> {booking_to_cancel['service']}\n"
-        f"<b>Data:</b> {formatted_date}\n"
-        f"<b>Ospedale:</b> {booking_to_cancel['hospital']}\n"
-        f"<b>ID Prenotazione:</b> {booking_to_cancel['booking_id']}\n\n"
-        f"Questa operazione è <b>irreversibile</b>!",
-        reply_markup=InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("✅ Sì, disdici", callback_data=f"confirm_cancel_{idx}"),
-                InlineKeyboardButton("❌ No, annulla", callback_data="cancel_cancel_book")
-            ]
-        ]),
-        parse_mode="HTML"
-    )
-    
-    return WAITING_FOR_BOOKING_TO_CANCEL
+    except Exception as e:
+        logger.error(f"Errore in handle_booking_to_cancel: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        await query.edit_message_text("⚠️ Si è verificato un errore nel processare la richiesta.")
+        if user_id in user_data:
+            user_data.pop(user_id, None)
+        return ConversationHandler.END
 
 async def confirm_cancel_booking(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Gestisce la conferma della disdetta della prenotazione."""
+    logger.info("Entrato in confirm_cancel_booking")
     query = update.callback_query
     await query.answer()
     
     user_id = query.from_user.id
     callback_data = query.data
+    
+    # Log per debug
+    logger.info(f"Callback conferma cancellazione: {callback_data}")
     
     if callback_data.startswith("cancel_cancel"):
         await query.edit_message_text("❌ Operazione annullata.")
@@ -1400,41 +1573,60 @@ async def confirm_cancel_booking(update: Update, context: ContextTypes.DEFAULT_T
         user_data.pop(user_id, None)
         return ConversationHandler.END
     
-    # Estraiamo l'indice della prenotazione
-    idx = int(callback_data.split("_")[2])
-    user_bookings = user_data[user_id]["bookings"]
-    
-    # Otteniamo la prenotazione
-    booking_to_cancel = user_bookings[idx]
-    booking_id = booking_to_cancel["booking_id"]
-    
-    # Inviamo un messaggio di attesa
-    await query.edit_message_text("🔄 Sto disdendo la prenotazione... Attendi un momento.")
-    
     try:
-        # Disdiciamo la prenotazione
-        result = cancel_booking(booking_id)
+        # Estraiamo l'indice della prenotazione
+        idx = int(callback_data.split("_")[2])
         
-        # Rimuoviamo la prenotazione dalle prescrizioni
-        prescriptions = load_input_data()
-        for p in prescriptions:
-            if "bookings" in p:
-                p["bookings"] = [b for b in p["bookings"] if b["booking_id"] != booking_id]
-        save_input_data(prescriptions)
+        if user_id not in user_data or "bookings" not in user_data[user_id]:
+            await query.edit_message_text("⚠️ Dati di prenotazione non trovati. Riprova.")
+            return ConversationHandler.END
+            
+        user_bookings = user_data[user_id]["bookings"]
         
-        # Inviamo il messaggio di conferma
-        await query.edit_message_text(
-            f"✅ <b>Prenotazione disdetta con successo!</b>\n\n"
-            f"La prenotazione per {booking_to_cancel['service']} è stata disdetta.",
-            parse_mode="HTML"
-        )
+        # Otteniamo la prenotazione
+        booking_to_cancel = user_bookings[idx]
+        booking_id = booking_to_cancel["booking_id"]
+        
+        # Inviamo un messaggio di attesa
+        await query.edit_message_text("🔄 Sto disdendo la prenotazione... Attendi un momento.")
+        
+        # Import qui per evitare import circolari
+        from modules.booking_client import cancel_booking
+        
+        try:
+            # Disdiciamo la prenotazione
+            result = cancel_booking(booking_id)
+            
+            # Rimuoviamo la prenotazione dalle prescrizioni
+            prescriptions = load_input_data()
+            for p in prescriptions:
+                if "bookings" in p:
+                    p["bookings"] = [b for b in p["bookings"] if b["booking_id"] != booking_id]
+            save_input_data(prescriptions)
+            
+            # Inviamo il messaggio di conferma
+            await query.edit_message_text(
+                f"✅ <b>Prenotazione disdetta con successo!</b>\n\n"
+                f"La prenotazione per {booking_to_cancel['service']} è stata disdetta.",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            await query.edit_message_text(
+                f"❌ Errore nella disdetta della prenotazione: {str(e)}"
+            )
+            logger.error(f"Errore nella cancellazione della prenotazione: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
     except Exception as e:
-        await query.edit_message_text(
-            f"❌ Errore nella disdetta della prenotazione: {str(e)}"
-        )
+        logger.error(f"Errore in confirm_cancel_booking: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        await query.edit_message_text("⚠️ Si è verificato un errore nel processare la richiesta.")
     
     # Puliamo i dati dell'utente
-    user_data.pop(user_id, None)
+    if user_id in user_data:
+        user_data.pop(user_id, None)
+    
     return ConversationHandler.END
 
 async def autobook_prescription(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1719,6 +1911,155 @@ async def handle_months_limit(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     return CONFIRM_DATE_FILTER
 
+async def toggle_auto_booking(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Abilita o disabilita la prenotazione automatica per una prescrizione."""
+    user_id = update.effective_user.id
+    
+    # Controlliamo se l'utente è autorizzato
+    if str(user_id) not in authorized_users:
+        await update.message.reply_text("🔒 Non sei autorizzato ad utilizzare questa funzione.")
+        return
+    
+    # Carichiamo le prescrizioni
+    prescriptions = load_input_data()
+    
+    # Filtriamo solo le prescrizioni dell'utente o tutte se è admin
+    is_admin = user_id == int(authorized_users[0]) if authorized_users else False
+    user_prescriptions = []
+    
+    if is_admin:
+        # L'admin vede tutte le prescrizioni
+        user_prescriptions = prescriptions
+    else:
+        # Gli utenti normali vedono solo le proprie
+        user_prescriptions = [p for p in prescriptions if p.get("telegram_chat_id") == user_id]
+    
+    if not user_prescriptions:
+        await update.message.reply_text("⚠️ Non hai prescrizioni da gestire.")
+        return ConversationHandler.END
+    
+    # Verifichiamo che le prescrizioni abbiano i dati necessari
+    valid_prescriptions = []
+    for p in user_prescriptions:
+        if "phone" in p and "email" in p:
+            valid_prescriptions.append(p)
+    
+    if not valid_prescriptions:
+        await update.message.reply_text(
+            "⚠️ Non hai prescrizioni con dati di contatto completi. "
+            "Rimuovile e aggiungile nuovamente per inserire telefono ed email."
+        )
+        return ConversationHandler.END
+    
+    # Creiamo i pulsanti per le prescrizioni
+    keyboard = []
+    
+    for idx, prescription in enumerate(valid_prescriptions):
+        desc = prescription.get("description", "Prescrizione")
+        fiscal_code = prescription["fiscal_code"]
+        nre = prescription["nre"]
+        
+        # Controlliamo lo stato attuale della prenotazione automatica
+        auto_book_enabled = prescription.get("auto_book_enabled", False)
+        status = "🤖 ON" if auto_book_enabled else "🤖 OFF"
+        
+        # Creiamo un pulsante con identificativo della prescrizione
+        keyboard.append([
+            InlineKeyboardButton(
+                f"{idx+1}. {desc[:25]}... ({status})",
+                callback_data=f"auto_book_{idx}"
+            )
+        ])
+    
+    keyboard.append([InlineKeyboardButton("❌ Annulla", callback_data="cancel_auto_book")])
+    
+    # Salviamo le prescrizioni nei dati dell'utente
+    user_data[user_id] = {
+        "action": "toggle_auto_booking",
+        "prescriptions": valid_prescriptions
+    }
+    
+    await update.message.reply_text(
+        "Seleziona la prescrizione per cui vuoi attivare/disattivare la prenotazione automatica:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    
+    return WAITING_FOR_AUTO_BOOK_CHOICE
+
+async def handle_auto_book_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gestisce la selezione della prescrizione per cui attivare/disattivare la prenotazione automatica."""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    callback_data = query.data
+    
+    if callback_data == "cancel_auto_book":
+        await query.edit_message_text("❌ Operazione annullata.")
+        # Puliamo i dati dell'utente
+        user_data.pop(user_id, None)
+        return ConversationHandler.END
+    
+    # Estraiamo l'indice della prescrizione
+    idx = int(callback_data.split("_")[2])
+    user_prescriptions = user_data[user_id]["prescriptions"]
+    
+    # Controlliamo che l'indice sia valido
+    if idx < 0 or idx >= len(user_prescriptions):
+        await query.edit_message_text("⚠️ Prescrizione non valida.")
+        user_data.pop(user_id, None)
+        return ConversationHandler.END
+    
+    # Otteniamo la prescrizione
+    prescription_to_toggle = user_prescriptions[idx]
+    
+    # Carichiamo tutte le prescrizioni
+    all_prescriptions = load_input_data()
+    
+    # Cerchiamo la prescrizione nel dataset completo
+    toggled = False
+    for prescription in all_prescriptions:
+        if (prescription["fiscal_code"] == prescription_to_toggle["fiscal_code"] and 
+            prescription["nre"] == prescription_to_toggle["nre"]):
+            
+            # Otteniamo lo stato attuale e lo invertiamo
+            current_state = prescription.get("auto_book_enabled", False)
+            prescription["auto_book_enabled"] = not current_state
+            
+            toggled = True
+            new_state = prescription["auto_book_enabled"]
+            break
+    
+    if toggled:
+        # Salviamo le prescrizioni aggiornate
+        save_input_data(all_prescriptions)
+        
+        # Stato da visualizzare nel messaggio
+        status_text = "attivata ✅" if new_state else "disattivata ❌"
+        
+        # Testo aggiuntivo per spiegare la funzionalità
+        info_text = (
+            "Il bot controllerà automaticamente le disponibilità ogni 5 minuti e "
+            "prenoterà il primo slot disponibile senza richiedere conferma."
+            if new_state else ""
+        )
+        
+        # Aggiorniamo il messaggio
+        await query.edit_message_text(
+            f"✅ Prenotazione automatica {status_text} per:\n\n"
+            f"Descrizione: {prescription_to_toggle.get('description', 'Non disponibile')}\n"
+            f"Codice Fiscale: {prescription_to_toggle['fiscal_code']}\n"
+            f"NRE: {prescription_to_toggle['nre']}\n\n"
+            f"{info_text}"
+        )
+    else:
+        await query.edit_message_text("⚠️ Impossibile modificare lo stato della prenotazione automatica.")
+    
+    # Puliamo i dati dell'utente
+    user_data.pop(user_id, None)
+    
+    return ConversationHandler.END
+
 async def handle_custom_months_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Gestisce l'input personalizzato per il limite di mesi."""
     user_id = update.effective_user.id
@@ -1844,8 +2185,10 @@ async def show_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔔 <b>Gestisci Notifiche</b> - Attiva/disattiva notifiche per una prescrizione\n"
         "⏱ <b>Imposta Filtro Date</b> - Filtra le notifiche entro un periodo di mesi\n"
         "🏥 <b>Prenota</b> - Prenota un appuntamento per una prescrizione\n"
-        "🤖 <b>Prenota Automaticamente</b> - Prenota automaticamente il primo slot disponibile\n"
+        "🤖 <b>Prenota Automaticamente</b> - Attiva/disattiva la prenotazione automatica\n"
         "📝 <b>Le mie Prenotazioni</b> - Visualizza e gestisci le prenotazioni attive\n\n"
+        "<b>Prenotazione Automatica:</b>\n"
+        "Quando attivi la prenotazione automatica per una prescrizione, il bot prenota automaticamente il primo slot disponibile utilizzando i dati di contatto salvati, senza richiedere ulteriori conferme.\n\n"
         "<b>Frequenza di controllo:</b> Ogni 5 minuti\n\n"
         "<b>Note:</b>\n"
         "• Il bot notifica solo quando ci sono cambiamenti significativi\n"
@@ -1853,7 +2196,7 @@ async def show_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Per problemi o assistenza, contatta l'amministratore",
         parse_mode="HTML"
     )
-    
+ 
 async def authorize_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Gestisce l'autorizzazione di nuovi utenti."""
     user_id = update.effective_user.id
@@ -1867,42 +2210,53 @@ async def authorize_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Memorizziamo che l'utente sta cercando di autorizzare qualcuno
     user_data[user_id] = {"action": "authorizing_user"}
     
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("❌ Annulla", callback_data="cancel_auth")]
+    ])
+    
     # Chiediamo l'ID dell'utente da autorizzare
     await update.message.reply_text(
         "Per autorizzare un nuovo utente, invia il suo ID Telegram.\n\n"
-        "L'utente può ottenere il proprio ID usando @userinfobot o altri bot simili."
+        "L'utente può ottenere il proprio ID usando @userinfobot o altri bot simili.",
+        reply_markup=keyboard
     )
+    return AUTHORIZING
+
+
+async def handle_cancel_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gestisce la pressione del pulsante '❌ Annulla' durante l'autorizzazione."""
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    if user_id in user_data:
+        user_data.pop(user_id, None)
+    await query.edit_message_text("❌ Operazione annullata.")
+    return ConversationHandler.END
 
 async def handle_auth_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Gestisce l'inserimento dell'ID utente da autorizzare."""
     user_id = update.effective_user.id
+    text = update.message.text.strip()
     
-    # Controlliamo se l'utente sta effettivamente autorizzando qualcuno
-    if user_id not in user_data or user_data[user_id].get("action") != "authorizing_user":
-        return
+    # Se l'utente ha digitato un comando di annullamento, esegui il cancel
+    if text.lower() in ["/cancel", "❌ annulla"]:
+        return await cancel_operation(update, context)
     
-    # Otteniamo l'ID dell'utente da autorizzare
-    new_user_id = update.message.text.strip()
+    if not text.isdigit():
+        await update.message.reply_text("⚠️ L'ID utente deve essere un numero. Riprova oppure digita /cancel per annullare:")
+        return  # Resta nello stesso stato finché non riceve un input valido
     
-    # Controlliamo se è un ID valido
-    if not new_user_id.isdigit():
-        await update.message.reply_text("⚠️ L'ID utente deve essere un numero.")
-        return
-    
-    # Controlliamo se è già autorizzato
+    new_user_id = text
     if new_user_id in authorized_users:
         await update.message.reply_text(f"⚠️ L'utente {new_user_id} è già autorizzato.")
-        user_data.pop(user_id, None)  # Puliamo i dati dell'utente
-        return
+        user_data.pop(user_id, None)
+        return ConversationHandler.END
     
-    # Aggiungiamo l'utente alla lista degli autorizzati
     authorized_users.append(new_user_id)
     save_authorized_users()
-    
     await update.message.reply_text(f"✅ Utente {new_user_id} autorizzato con successo!")
-    
-    # Puliamo i dati dell'utente
     user_data.pop(user_id, None)
+    return ConversationHandler.END
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Gestisce i messaggi di testo e i comandi dai pulsanti."""
@@ -1974,7 +2328,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "🏥 Prenota":
         return await book_prescription(update, context)
     elif text == "🤖 Prenota Automaticamente":
-        return await autobook_prescription(update, context)
+        return await toggle_auto_booking(update, context)
     elif text == "📝 Le mie Prenotazioni":
         return await list_bookings(update, context)
     elif text == "ℹ️ Informazioni":
@@ -1997,14 +2351,79 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def error_handler(update, context):
     """Gestisce gli errori del bot."""
-    logger.error(f"Errore nell'update {update}: {context.error}")
+    # Otteniamo l'errore
+    error = context.error
+    
+    # Logging avanzato con traccia di errore
+    import traceback
+    error_trace = traceback.format_exc()
+    
+    # Logghiamo l'errore dettagliato
+    logger.error(f"Errore nell'update {update}: {error}")
+    logger.error(f"Traccia dell'errore: {error_trace}")
+    
+    # Recuperiamo l'ID utente
+    user_id = None
+    if update.effective_user:
+        user_id = update.effective_user.id
+    
+    # Puliamo i dati dell'utente se possibile
+    if user_id and user_id in user_data:
+        logger.info(f"Pulizia dati utente per {user_id} dopo errore")
+        user_data.pop(user_id, None)
     
     # Informiamo l'utente dell'errore (se possibile)
     if update and update.effective_chat:
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="❌ Si è verificato un errore. Riprova più tardi o contatta l'amministratore."
+            text="❌ Si è verificato un errore durante l'elaborazione della tua richiesta. "
+                 "Per favore, riprova o contatta l'amministratore se il problema persiste."
         )
+    
+    # Ripristina la tastiera principale se possibile
+    if update and update.effective_chat and update.effective_user:
+        main_keyboard = ReplyKeyboardMarkup([
+            ["➕ Aggiungi Prescrizione", "➖ Rimuovi Prescrizione"],
+            ["📋 Lista Prescrizioni", "🔄 Verifica Disponibilità"],
+            ["🔔 Gestisci Notifiche", "⏱ Imposta Filtro Date"],
+            ["🏥 Prenota", "🤖 Prenota Automaticamente"],
+            ["📝 Le mie Prenotazioni", "ℹ️ Informazioni"],
+            ["🔑 Autorizza Utente"]
+        ], resize_keyboard=True)
+        
+        try:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="🔄 Sessione ripristinata. Seleziona un'operazione:",
+                reply_markup=main_keyboard
+            )
+        except Exception as e:
+            logger.error(f"Errore nel ripristino della tastiera: {e}")
+
+
+# Funzione per recuperare da errori
+async def error_recovery(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gestisce il recupero da errori nella conversazione."""
+    user_id = update.effective_user.id
+    
+    # Pulisci i dati dell'utente
+    if user_id in user_data:
+        user_data.pop(user_id, None)
+    
+    await update.message.reply_text(
+        "⚠️ Si è verificato un problema con l'operazione corrente. "
+        "Per favore, ricomincia.",
+        reply_markup=ReplyKeyboardMarkup([
+            ["➕ Aggiungi Prescrizione", "➖ Rimuovi Prescrizione"],
+            ["📋 Lista Prescrizioni", "🔄 Verifica Disponibilità"],
+            ["🔔 Gestisci Notifiche", "⏱ Imposta Filtro Date"],
+            ["🏥 Prenota", "🤖 Prenota Automaticamente"],
+            ["📝 Le mie Prenotazioni", "ℹ️ Informazioni"],
+            ["🔑 Autorizza Utente"]
+        ], resize_keyboard=True)
+    )
+    
+    return ConversationHandler.END
 
 # =============================================================================
 # SETUP HANDLERS
@@ -2029,6 +2448,25 @@ def setup_handlers(application):
                 MessageHandler(filters.Regex("^❌ Annulla$"), cancel_operation),
                 CommandHandler("cancel", cancel_operation),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_nre)
+            ],
+            WAITING_FOR_PHONE: [
+                MessageHandler(filters.Regex("^❌ Annulla$"), cancel_operation),
+                CommandHandler("cancel", cancel_operation),
+                # Assicurati che vengano usate le funzioni corrette in base all'azione
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_add_phone)
+            ],
+            WAITING_FOR_EMAIL: [
+                MessageHandler(filters.Regex("^❌ Annulla$"), cancel_operation),
+                CommandHandler("cancel", cancel_operation),
+                # Questa è la modifica chiave: usiamo un gestore condizionale per l'email
+                MessageHandler(filters.TEXT & ~filters.COMMAND, lambda update, context: 
+                               handle_add_email(update, context) 
+                               if update.effective_user.id in user_data and user_data[update.effective_user.id].get("action") == "add_prescription"
+                               else handle_email(update, context))
+            ],
+            AUTHORIZING: [
+                CallbackQueryHandler(handle_cancel_auth, pattern="^cancel"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_auth_user_id)
             ],
             CONFIRM_ADD: [
                 CallbackQueryHandler(confirm_add_prescription)
@@ -2055,35 +2493,53 @@ def setup_handlers(application):
                 CallbackQueryHandler(handle_autobook_choice, pattern="^autobook_"),
                 CallbackQueryHandler(cancel_operation, pattern="^cancel_")
             ],
-            WAITING_FOR_PHONE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_phone_number)
-            ],
-            WAITING_FOR_EMAIL: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_email)
-            ],
             WAITING_FOR_SLOT_CHOICE: [
                 CallbackQueryHandler(handle_slot_choice)
             ],
             WAITING_FOR_BOOKING_CONFIRMATION: [
                 CallbackQueryHandler(confirm_booking)
             ],
+            WAITING_FOR_AUTO_BOOK_CHOICE: [
+                CallbackQueryHandler(handle_auto_book_toggle)
+            ],
             WAITING_FOR_BOOKING_TO_CANCEL: [
                 CallbackQueryHandler(handle_booking_to_cancel, pattern="^cancel_book_"),
                 CallbackQueryHandler(confirm_cancel_booking, pattern="^confirm_cancel_"),
-                CallbackQueryHandler(cancel_operation, pattern="^cancel_")
+                CallbackQueryHandler(cancel_operation, pattern="^cancel_cancel_book$")
             ]
         },
         fallbacks=[
             CommandHandler("cancel", cancel_operation),
-            MessageHandler(filters.Regex("^❌ Annulla$"), cancel_operation)
+            MessageHandler(filters.Regex("^❌ Annulla$"), cancel_operation),
+            # Per recuperare da errori
+            MessageHandler(filters.ALL, error_recovery)
         ]
     )
+    
+    application.add_handler(CommandHandler("cancel", cancel_operation)) # handler globale per il /cancel
+
     
     # Aggiungiamo i gestori
     application.add_handler(conv_handler)
     
-    # Gestore per la cancellazione di prenotazioni
-    application.add_handler(CallbackQueryHandler(start_cancel_booking, pattern="^cancel_appointment$"))
+    booking_cancel_handler = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(start_cancel_booking, pattern="^cancel_appointment$")
+        ],
+        states={
+            WAITING_FOR_BOOKING_TO_CANCEL: [
+                CallbackQueryHandler(handle_booking_to_cancel, pattern="^cancel_book_"),
+                CallbackQueryHandler(confirm_cancel_booking, pattern="^confirm_cancel_"),
+                CallbackQueryHandler(cancel_operation, pattern="^cancel_cancel_book$")
+            ]
+        },
+        fallbacks=[
+            CallbackQueryHandler(cancel_operation, pattern="^cancel_")
+        ],
+        name="booking_cancellation"
+    )
+    
+    application.add_handler(booking_cancel_handler)
     
     # Gestore errori
     application.add_error_handler(error_handler)
