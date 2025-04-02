@@ -25,7 +25,8 @@ def compare_availabilities(previous, current, fiscal_code, nre, prescription_nam
         "min_changes_to_notify": 2,
         "time_threshold_minutes": 60,
         "show_all_current": True,  # Mostra tutte le disponibilità attuali
-        "months_limit": None       # Nessun limite di mesi predefinito
+        "months_limit": None,       # Nessun limite di mesi predefinito
+        "hospitals_blacklist": []
     }
     
     # Usa la configurazione fornita o quella predefinita
@@ -37,6 +38,18 @@ def compare_availabilities(previous, current, fiscal_code, nre, prescription_nam
             if key not in config:
                 config[key] = value
     
+    # Otteniamo la blacklist degli ospedali
+    hospitals_blacklist = config.get("hospitals_blacklist", [])
+    
+    # Filtriamo le disponibilità (rimuovendo gli ospedali in blacklist)
+    if hospitals_blacklist:
+        filtered_current = []
+        for avail in current:
+            hospital_name = avail['hospital']['name']
+            if hospital_name not in hospitals_blacklist:
+                filtered_current.append(avail)
+        current = filtered_current
+    
     # Se è la prima volta che controlliamo questa prescrizione
     if not previous or not current:
         # Se non c'erano dati precedenti, consideriamo tutto come nuovo ma non spammiamo
@@ -46,10 +59,14 @@ def compare_availabilities(previous, current, fiscal_code, nre, prescription_nam
             if months_limit is not None:
                 filtered_current = [
                     avail for avail in current 
-                    if is_date_within_range(avail['date'], months_limit)
+                    if is_date_within_range(avail['date'], months_limit) and 
+                       avail['hospital']['name'] not in hospitals_blacklist
                 ]
             else:
-                filtered_current = current
+                filtered_current = [
+                    avail for avail in current
+                    if avail['hospital']['name'] not in hospitals_blacklist
+                ]
             
             # Se non ci sono disponibilità nel range, non mostriamo nulla
             if not filtered_current:
@@ -452,8 +469,8 @@ def process_prescription(prescription, previous_data, chat_id=None):
     current_availabilities = availabilities['content']
     
     # *** In questo punto aggiorniamo il database delle location ***
-    if os.path.exists("locations.json"):
-        with open("locations.json", "r") as f:
+    if os.path.exists("../locations.json"):
+        with open("../locations.json", "r") as f:
             locations_db = json.load(f)
     else:
         locations_db = {}
@@ -466,7 +483,7 @@ def process_prescription(prescription, previous_data, chat_id=None):
         update_location_db(hospital_name, address, locations_db)
     
     # Salva le modifiche sul file JSON
-    with open("locations.json", "w") as f:
+    with open("../locations.json", "w") as f:
         json.dump(locations_db, f, indent=2)
     
     # Compare with previous data to detect changes
@@ -626,8 +643,4 @@ La prenotazione è stata effettuata automaticamente. Controlla la tua email per 
     previous_data[prescription_key] = current_availabilities
     
     return True, prescription_name
-    
-    
-    
-    
     

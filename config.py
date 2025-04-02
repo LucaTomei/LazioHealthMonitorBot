@@ -1,6 +1,7 @@
 import os
 import logging
 from logging.handlers import RotatingFileHandler
+from telegram import ReplyKeyboardMarkup
 
 # Configurazione del logging
 logging.basicConfig(
@@ -43,3 +44,13 @@ authorized_users = []
 
 # Dizionario per tenere traccia delle conversazioni in corso
 user_data = {}
+
+# Definizione della tastiera principale come variabile globale
+MAIN_KEYBOARD = ReplyKeyboardMarkup([
+    ["➕ Aggiungi Prescrizione", "➖ Rimuovi Prescrizione"],
+    ["📋 Lista Prescrizioni", "🔄 Verifica Disponibilità"],
+    ["🔔 Gestisci Notifiche", "⏱ Imposta Filtro Date"],
+    ["🏥 Prenota", "🤖 Prenota Automaticamente"],
+    ["🚫 Blacklist Ospedali", "📝 Le mie Prenotazioni"],
+    ["ℹ️ Informazioni", "🔑 Autorizza Utente"]
+], resize_keyboard=True)

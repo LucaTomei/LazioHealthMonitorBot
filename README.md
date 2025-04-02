@@ -11,6 +11,7 @@ Un bot Telegram avanzato che monitora automaticamente le disponibilità del Serv
 - 🔍 **Monitoraggio automatico**: Controlla le disponibilità ogni 5 minuti
 - 🔔 **Notifiche intelligenti**: Ricevi avvisi personalizzati quando ci sono nuovi appuntamenti
 - 📅 **Filtro date**: Configura notifiche solo per appuntamenti entro un periodo specificato
+- 🚫 **Blacklist ospedali**: Escludi strutture specifiche dalle notifiche per ogni prescrizione
 - 🏥 **Prenotazione diretta**: Prenota appuntamenti direttamente dal bot
 - 🤖 **Prenotazione automatica**: Prenota automaticamente il primo slot disponibile
 - 📝 **Gestione prenotazioni**: Visualizza e disdici le tue prenotazioni attive
@@ -80,6 +81,7 @@ python recup_monitor_multiprocess.py
 - **🔄 Verifica Disponibilità** - Controlla immediatamente le disponibilità
 - **🔔 Gestisci Notifiche** - Attiva/disattiva notifiche per una prescrizione
 - **⏱ Imposta Filtro Date** - Filtra le notifiche entro un periodo di mesi
+- **🚫 Blacklist Ospedali** - Escludi ospedali specifici dalle notifiche
 - **🏥 Prenota** - Prenota un appuntamento per una prescrizione
 - **🤖 Prenota Automaticamente** - Prenota automaticamente il primo slot disponibile
 - **📝 Le mie Prenotazioni** - Visualizza e gestisci le prenotazioni attive
@@ -119,6 +121,16 @@ Il bot verificherà la validità della prescrizione e inizierà a monitorarla au
 3. Per disdire una prenotazione, seleziona "❌ Disdici una prenotazione"
 4. Scegli quale prenotazione disdire
 5. Conferma la disdetta
+
+### Come gestire la blacklist degli ospedali
+
+1. Seleziona "🚫 Blacklist Ospedali"
+2. Scegli la prescrizione per cui vuoi gestire la blacklist
+3. Scorri la lista degli ospedali disponibili (usa i pulsanti ⬅️ e ➡️ per navigare)
+4. Seleziona gli ospedali da escludere (❌) o includere (✅) nelle notifiche
+5. Al termine, premi "✅ Conferma" per salvare le preferenze
+
+Le notifiche relative alla prescrizione selezionata non mostreranno più disponibilità negli ospedali esclusi.
 
 ## 🔒 Gestione degli utenti
 
@@ -177,6 +189,7 @@ Per autorizzare un nuovo utente:
 | `time_threshold_minutes` | Number | `60` | Considera due appuntamenti variati dello stesso orario |
 | `show_all_current` | Boolean | `true` | Mostra tutte le disponibilità nel messaggio |
 | `months_limit` | Number/null | `null` | Filtra appuntamenti entro X mesi (null = nessun limite) |
+| `hospitals_blacklist` | Array | `[]` | Elenco degli ospedali da escludere dalle notifiche |
 
 ## 🎛️ Architettura
 
