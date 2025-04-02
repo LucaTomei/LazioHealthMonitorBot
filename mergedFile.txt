@@ -1,4 +1,1079 @@
-import re, os, json
+---- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\authorized_users.json ---- 
+[
+] 
+---- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\input_prescriptions.json ---- 
+[] 
+---- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\locations.json ---- 
+{} 
+---- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\previous_data.json ---- 
+{} 
+---- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\config.py ---- 
+import os
+import logging
+from logging.handlers import RotatingFileHandler
+
+# Configurazione del logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        # File handler con rotazione: max 1MB per file, massimo 5 file
+        RotatingFileHandler(
+            "recup_monitor.log", 
+            maxBytes=1024*1024,  # 1MB
+            backupCount=5        # Mantiene 5 file di backup
+        ),
+        logging.StreamHandler()  # Stampa anche sulla console
+    ]
+)
+logger = logging.getLogger("RecupMonitor")
+
+# Base configuration
+BASE_URL = "https://recup-webapi-appmobile.regione.lazio.it"
+AUTH_HEADER = "Basic QVBQTU9CSUxFX1NQRUNJQUw6UGs3alVTcDgzbUh4VDU4NA=="
+
+# Configurazione Telegram
+TELEGRAM_TOKEN = ""
+
+# Percorso del file di input e dati precedenti
+INPUT_FILE = "input_prescriptions.json"
+PREVIOUS_DATA_FILE = "previous_data.json"
+USERS_FILE = "authorized_users.json"
+
+# Stati per la conversazione
+(WAITING_FOR_FISCAL_CODE, WAITING_FOR_NRE, CONFIRM_ADD, 
+ WAITING_FOR_PRESCRIPTION_TO_DELETE, WAITING_FOR_PRESCRIPTION_TO_TOGGLE,
+ WAITING_FOR_DATE_FILTER, WAITING_FOR_MONTHS_LIMIT, CONFIRM_DATE_FILTER,
+ WAITING_FOR_BOOKING_CHOICE, WAITING_FOR_BOOKING_CONFIRMATION, WAITING_FOR_PHONE,
+ WAITING_FOR_EMAIL, WAITING_FOR_SLOT_CHOICE, WAITING_FOR_BOOKING_TO_CANCEL,
+ WAITING_FOR_AUTO_BOOK_CHOICE, AUTHORIZING) = range(16)  
+
+# Lista di utenti autorizzati
+authorized_users = []
+
+# Dizionario per tenere traccia delle conversazioni in corso
+user_data = {} 
+---- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\recup_monitor.py ---- 
+import multiprocessing
+import logging
+import os
+import asyncio
+import time
+from datetime import datetime
+
+# Importiamo le configurazioni dal modulo config
+from config import logger, TELEGRAM_TOKEN, authorized_users
+
+# Configurazione del logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger("RecupMultiprocess")
+
+def run_telegram_bot(users_list=None):
+    """Funzione che esegue il bot Telegram in un processo separato."""
+    global authorized_users
+    if users_list:
+        authorized_users.clear()
+        authorized_users.extend(users_list)
+    logger.info("Avvio del processo per il bot Telegram")
+    try:
+        import asyncio
+        from telegram.ext import Application
+        from modules.bot_handlers import setup_handlers
+        
+        # Configuriamo un nuovo loop per il processo
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        async def run_bot():
+            try:
+                # Creiamo l'applicazione
+                application = Application.builder().token(TELEGRAM_TOKEN).build()
+                
+                # Setup dei gestori
+                setup_handlers(application)
+                
+                # Avviamo il bot
+                logger.info("Bot Telegram in avvio...")
+                await application.initialize()
+                await application.start()
+                await application.updater.start_polling(allowed_updates=["message", "callback_query"])
+                
+                # Manteniamo il bot in esecuzione
+                while True:
+                    await asyncio.sleep(1)
+            except Exception as e:
+                logger.error(f"Errore durante l'esecuzione del bot: {str(e)}")
+                import traceback
+                logger.error(traceback.format_exc())
+                
+                # Riavviamo il bot dopo un errore
+                logger.info("Tentativo di riavvio del bot tra 10 secondi...")
+                await asyncio.sleep(10)
+                return await run_bot()  # Riavvio ricorsivo
+        
+        # Eseguiamo il bot nel loop
+        loop.run_until_complete(run_bot())
+    
+    except Exception as e:
+        logger.error(f"Errore critico nel processo del bot Telegram: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        
+def run_monitoring():
+    """Funzione che esegue il monitoraggio in un processo separato."""
+    logger.info("Avvio del processo per il monitoraggio")
+    try:
+        import asyncio
+        import time
+        from datetime import datetime
+        
+        # Creiamo un nuovo loop per questo processo
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Funzione migliorata che si riavvia automaticamente in caso di errore
+        async def robust_monitoring_loop():
+            # Carica dati precedenti
+            from modules.data_utils import load_previous_data, save_previous_data, load_input_data
+            from modules.prescription_processor import process_prescription
+            
+            previous_data = load_previous_data()
+            
+            while True:
+                try:
+                    start_time = time.time()
+                    logger.info(f"Inizio ciclo di monitoraggio: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                    
+                    # Carichiamo i dati delle prescrizioni
+                    prescriptions = load_input_data()
+                    
+                    # Process each prescription
+                    for prescription in prescriptions:
+                        try:
+                            process_prescription(prescription, previous_data)
+                        except Exception as e:
+                            logger.error(f"Errore nel processare la prescrizione {prescription.get('nre', 'sconosciuta')}: {str(e)}")
+                            import traceback
+                            logger.error(traceback.format_exc())
+                        
+                        # Breve pausa tra una prescrizione e l'altra
+                        await asyncio.sleep(1)
+                    
+                    # Salviamo i dati aggiornati
+                    save_previous_data(previous_data)
+                    
+                    # Calcoliamo il tempo di attesa per mantenere cicli di 5 minuti
+                    elapsed = time.time() - start_time
+                    sleep_time = max(300 - elapsed, 1)  # 300 secondi = 5 minuti
+                    
+                    logger.info(f"Ciclo completato in {elapsed:.2f} secondi. In attesa del prossimo ciclo tra {sleep_time:.2f} secondi.")
+                    await asyncio.sleep(sleep_time)
+                    
+                except Exception as e:
+                    logger.error(f"Errore nel ciclo di monitoraggio: {str(e)}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    
+                    # In caso di errore, aspetta 60 secondi e riprova
+                    logger.info("Riavvio del ciclo di monitoraggio tra 60 secondi...")
+                    await asyncio.sleep(60)
+        
+        # Avvia il loop di monitoraggio
+        loop.run_until_complete(robust_monitoring_loop())
+    
+    except Exception as e:
+        logger.error(f"Errore critico nel processo di monitoraggio: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+
+def main():
+    """Funzione principale che avvia il sistema multi-processo."""
+    logger.info("Avvio del sistema multi-processo")
+    
+    # Caricamento configurazioni e dati comuni
+    from modules.data_utils import load_authorized_users
+    load_authorized_users()
+    
+    users = list(authorized_users)
+    
+    if not authorized_users:
+        logger.warning("Nessun utente autorizzato trovato! Il sistema aspetterà l'aggiunta manuale di un utente.")
+    
+    # Impostazioni avanzate per i processi separati
+    # Questa modifica fa sì che i processi siano completamente indipendenti
+    mp_context = multiprocessing.get_context('spawn')
+    
+    # Creiamo e avviamo il processo per il bot Telegram
+    #bot_process = mp_context.Process(target=run_telegram_bot)
+    bot_process = mp_context.Process(target=run_telegram_bot, args=(users,))
+
+    bot_process.daemon = True  # Il processo terminerà quando il processo principale termina
+    bot_process.start()
+    
+    # Creiamo e avviamo il processo per il monitoraggio
+    monitoring_process = mp_context.Process(target=run_monitoring)
+    monitoring_process.daemon = True
+    monitoring_process.start()
+    
+    # Attendiamo che i processi terminino (non dovrebbe mai accadere a meno di errori)
+    logger.info("Sistema multi-processo avviato. Processi in esecuzione.")
+    
+    try:
+        # Invece di fare join direttamente, controlliamo periodicamente lo stato
+        while bot_process.is_alive() and monitoring_process.is_alive():
+            time.sleep(1)  # Controlliamo ogni secondo
+            
+        # Se siamo qui, uno dei processi è terminato inaspettatamente
+        if not bot_process.is_alive():
+            logger.error("Il processo del bot Telegram è terminato inaspettatamente, riavvio...")
+            bot_process = mp_context.Process(target=run_telegram_bot)
+            bot_process.daemon = True
+            bot_process.start()
+        
+        if not monitoring_process.is_alive():
+            logger.error("Il processo di monitoraggio è terminato inaspettatamente, riavvio...")
+            monitoring_process = mp_context.Process(target=run_monitoring)
+            monitoring_process.daemon = True
+            monitoring_process.start()
+            
+    except KeyboardInterrupt:
+        logger.info("Interruzione richiesta dall'utente, terminazione dei processi...")
+        bot_process.terminate()
+        monitoring_process.terminate()
+        bot_process.join(timeout=5)
+        monitoring_process.join(timeout=5)
+        logger.info("Processi terminati correttamente.")
+    except Exception as e:
+        logger.error(f"Errore nel sistema multi-processo: {str(e)}")
+        bot_process.terminate()
+        monitoring_process.terminate()
+        bot_process.join(timeout=5)
+        monitoring_process.join(timeout=5)
+
+if __name__ == "__main__":
+    main() 
+---- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\modules\api_client.py ---- 
+import requests
+import logging
+
+from config import (
+    logger, BASE_URL, AUTH_HEADER
+)
+
+def get_access_token():
+    """Obtain access token from the authentication endpoint."""
+    token_url = "https://gwapi-az.servicelazio.it/token"
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/x-www-form-urlencoded; charset=utf-8",
+        "Authorization": "Basic aFJaMkYxNkthcWQ5dzZxRldEVEhJbHg3UnVRYTpnaUVHbEp4a0Iza1VBdWRLdXZNdFBJaTVRc2th",
+        "Accept-Language": "it-IT;q=1.0",
+        "User-Agent": "RLGEOAPP/2.2.0 (it.laziocrea.rlgeoapp; build:2.2.0; iOS 18.3.1) Alamofire/5.10.2"
+    }
+    
+    data = {
+        "grant_type": "client_credentials"
+    }
+    
+    try:
+        response = requests.post(token_url, headers=headers, data=data)
+        response.raise_for_status()
+        return response.json()['access_token']
+    except Exception as e:
+        logger.error(f"Errore nell'ottenere il token di accesso: {str(e)}")
+        return None
+
+def update_device_token(access_token):
+    """Update device token."""
+    # Questa funzione può fallire senza compromettere il funzionamento principale
+    try:
+        url = f"{BASE_URL}/salute/1.0/notifiche/dispositivo/ct6U4eGiTUfJlh-8la_XTW%3AAPA91bGpiDbgIPrQ4HRF6xB2TembPIAtwywCde0hsMEplYm9DLxaws-bUokiv3bwcLyMrYI3ZyKEj6_Gi8FT4jY2w-8-ajUJeH-qdVRFHWdUgLZvYg-ZxVk"
+        
+        headers = {
+            "Accept-Encoding": "application/json; charset=utf-8",
+            "Accept-Language": "it-IT;q=1.0",
+            "User-Agent": "RLGEOAPP/2.2.0 (it.laziocrea.rlgeoapp; build:2.2.0; iOS 18.3.1) Alamofire/5.10.2",
+            "Accept": "application/json",
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json"
+        }
+        
+        data = {
+            "token_new": "ct6U4eGiTUfJlh-8la_XTW:APA91bGpiDbgIPrQ4HRF6xB2TembPIAtwywCde0hsMEplYm9DLxaws-bUokiv3bwcLyMrYI3ZyKEj6_Gi8FT4jY2w-8-ajUJeH-qdVRFHWdUgLZvYg-ZxVk"
+        }
+        
+        response = requests.put(url, headers=headers, json=data)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.warning(f"Avviso: impossibile aggiornare il token del dispositivo: {str(e)}")
+        # Continuiamo comunque l'esecuzione
+        return None
+
+def get_patient_info(fiscal_code):
+    """Retrieve patient information."""
+    url = f"{BASE_URL}/api/v3/system-apis/patients"
+    
+    headers = {
+        "Connection": "keep-alive",
+        "Authorization": AUTH_HEADER,
+        "Accept-Language": "it-IT,it;q=0.9",
+        "Host": "recup-webapi-appmobile.regione.lazio.it",
+        "Accept": "*/*",
+        "Accept-Encoding": "gzip",
+        "User-Agent": "salutelazio/2.2.0 CFNetwork/3826.400.120 Darwin/24.3.0"
+    }
+    
+    params = {
+        "fiscalCode": fiscal_code
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"Errore nell'ottenere informazioni sul paziente {fiscal_code}: {str(e)}")
+        return None
+
+def get_doctor_info(fiscal_code):
+    """Get doctor information."""
+    url = f"{BASE_URL}/api/v4/experience-apis/doctors/bpx"
+    
+    headers = {
+        "Connection": "keep-alive",
+        "Authorization": AUTH_HEADER,
+        "Accept-Language": "it-IT,it;q=0.9",
+        "Host": "recup-webapi-appmobile.regione.lazio.it",
+        "Accept": "*/*",
+        "Accept-Encoding": "gzip",
+        "User-Agent": "salutelazio/2.2.0 CFNetwork/3826.400.120 Darwin/24.3.0",
+        "Content-Type": "application/json"
+    }
+    
+    data = {
+        "personIdentifier": fiscal_code
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=data)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"Errore nell'ottenere le informazioni del medico per {fiscal_code}: {str(e)}")
+        return None
+
+def book_appointment(process_id, data_prenotazione, diary_id, service_cur, nre, fiscal_code):
+    """
+    Perform prebooking for an appointment.
+    
+    This function matches the API call in 1.har, creating a temporary hold on the appointment slot.
+    """
+    url = f"{BASE_URL}/api/v4/experience-apis/doctors/bpx/{process_id}/prebooking"
+    
+    headers = {
+        "Accept": "*/*",
+        "Content-Type": "application/json",
+        "Accept-Language": "it-IT,it;q=0.9",
+        "Authorization": AUTH_HEADER,
+        "Host": "recup-webapi-appmobile.regione.lazio.it",
+        "Connection": "keep-alive",
+        "User-Agent": "salutelazio/2.2.0 CFNetwork/3826.400.120 Darwin/24.3.0",
+        "Accept-Encoding": "gzip"
+    }
+    
+    payload = {
+        "date": data_prenotazione,
+        "diaryId": diary_id,
+        "requestId": "A0",
+        "supplyModeId": "A",
+        "extraServices": [],
+        "serviceCur": service_cur,
+        "exemptionId": "NE00",
+        "priority": "P",
+        "nre": nre,
+        "processId": process_id,
+        "personIdentifier": fiscal_code
+    }
+    
+    response = requests.post(url, headers=headers, json=payload, verify=False)
+    
+    # More detailed logging for debugging
+    print(f"Pre-booking Status Code: {response.status_code}")
+    
+    if response.status_code != 201:  # The API returns 201 Created for successful prebookings
+        print(f"Pre-booking Error Response: {response.text}")
+        raise Exception(f"Pre-booking failed with status code {response.status_code}")
+    
+    return response.json()
+
+def complete_booking(fiscal_code, process_id, nre, phone_number, email, lock_id, order_id, data_prenotazione, diary_id):
+    """
+    Complete the booking process after a successful prebooking.
+    
+    This function matches the API call in 2.har, finalizing the appointment reservation.
+    """
+    url = f"{BASE_URL}/api/v4/process-apis/booking-management/bookings"
+    
+    headers = {
+        "Accept": "*/*",
+        "Content-Type": "application/json",
+        "Accept-Language": "it-IT,it;q=0.9",
+        "Authorization": AUTH_HEADER,
+        "Host": "recup-webapi-appmobile.regione.lazio.it",
+        "Connection": "keep-alive",
+        "User-Agent": "salutelazio/2.2.0 CFNetwork/3826.400.120 Darwin/24.3.0",
+        "Accept-Encoding": "gzip"
+    }
+    
+    # This payload structure exactly matches what's in 2.har
+    payload = {
+        "prescriptionNumber": nre,
+        "processId": process_id,
+        "diaryId": diary_id,  # Ora passato come parametro
+        "contacts": {
+            "phoneNumber": phone_number,
+            "email": email
+        },
+        "startTime": data_prenotazione,
+        "services": [{
+            "id": order_id,
+            "requestId": "A0"
+        }],
+        "lockId": lock_id,
+        "personIdentifier": fiscal_code,
+        "status": "PRENOTATA",
+        "supplyModeId": "A"
+    }
+    
+    response = requests.post(url, headers=headers, json=payload, verify=False)
+    
+    # Enhanced error handling and logging
+    print(f"Complete Booking Status Code: {response.status_code}")
+    
+    if response.status_code != 200:
+        print(f"Complete Booking Error Response: {response.text}")
+        raise Exception(f"Booking completion failed with status code {response.status_code}")
+    
+    result = response.json()
+    
+    # Extract booking ID with robust error handling
+    booking_id = None
+    if 'id' in result:
+        booking_id = result['id']
+    elif 'content' in result and result['content'] and 'id' in result['content'][0]:
+        booking_id = result['content'][0]['id']
+    else:
+        print("Warning: Could not find booking ID in response")
+        print(f"Response content: {result}")
+    
+    return result, booking_id
+
+def get_booking_document(booking_id, output_path=None):
+    """
+    Retrieve the booking document (PDF) and save it locally.
+    
+    This function matches the API call in 3.har.
+    """
+    url = f"{BASE_URL}/api/v3/process-apis/booking-management/bookings/{booking_id}/documents"
+    
+    headers = {
+        "Accept": "*/*",
+        "Accept-Language": "it-IT,it;q=0.9",
+        "Authorization": AUTH_HEADER,
+        "Host": "recup-webapi-appmobile.regione.lazio.it",
+        "Connection": "keep-alive",
+        "User-Agent": "salutelazio/2.2.0 CFNetwork/3826.400.120 Darwin/24.3.0",
+        "Accept-Encoding": "gzip"
+    }
+    
+    response = requests.get(url, headers=headers, verify=False)
+    
+    # Enhanced error handling
+    if response.status_code != 200:
+        print(f"Get Document Error: Status Code {response.status_code}")
+        print(f"Response content: {response.text}")
+        raise Exception(f"Failed to retrieve booking document with status code {response.status_code}")
+    
+    # If we need to save the PDF
+    if output_path is None:
+        # Create a default filename with booking ID and timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = f"booking_{booking_id}_{timestamp}.pdf"
+    
+    # Save the PDF to disk
+    with open(output_path, 'wb') as f:
+        f.write(response.content)
+    
+    print(f"✅ Booking document saved to: {output_path}")
+    return output_path
+
+def cancel_booking(booking_id):
+    """
+    Cancel a specific booking.
+    
+    This function matches the API call in 6.har.
+    """
+    url = f"{BASE_URL}/api/v3/process-apis/booking-management/bookings"
+    
+    headers = {
+        "Accept": "*/*",
+        "Content-Type": "application/json",
+        "Accept-Language": "it-IT,it;q=0.9",
+        "Authorization": AUTH_HEADER,
+        "Host": "recup-webapi-appmobile.regione.lazio.it",
+        "Connection": "keep-alive",
+        "User-Agent": "salutelazio/2.2.0 CFNetwork/3826.400.120 Darwin/24.3.0",
+        "Accept-Encoding": "gzip"
+    }
+    
+    # This payload structure exactly matches what's in 6.har
+    payload = [{
+        "reasonId": 4,  # Reason code for cancellation
+        "bookingStatus": "ELIMINATA",
+        "identifiedBy": "ID_DI_SISTEMA",
+        "identifier": booking_id
+    }]
+    
+    response = requests.patch(url, headers=headers, json=payload, verify=False)
+    
+    # Better error handling
+    if response.status_code != 200:
+        print(f"Cancellation Error: Status Code {response.status_code}")
+        print(f"Response content: {response.text}")
+        raise Exception(f"Booking cancellation failed with status code {response.status_code}")
+    
+    result = response.json()
+    
+    # Check if cancellation was successful using the results
+    if result and '_messages' in result:
+        if not result['_messages']:
+            print("✅ Booking successfully canceled")
+        else:
+            print("⚠️ Cancellation may have issues:", result['_messages'])
+    else:
+        print("✅ Booking canceled successfully")
+    
+    return result
+
+
+def check_prescription(patient_id, nre):
+    """Check prescription details."""
+    url = f"{BASE_URL}/api/v3/experience-apis/citizens/prescriptions/check-prescription"
+    
+    headers = {
+        "Connection": "keep-alive",
+        "Authorization": AUTH_HEADER,
+        "Accept-Language": "it-IT,it;q=0.9",
+        "Host": "recup-webapi-appmobile.regione.lazio.it",
+        "Accept": "*/*",
+        "Accept-Encoding": "gzip",
+        "User-Agent": "salutelazio/2.2.0 CFNetwork/3826.400.120 Darwin/24.3.0"
+    }
+    
+    params = {
+        "patientId": patient_id,
+        "nre": nre
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"Errore nel controllare la prescrizione {nre}: {str(e)}")
+        return None
+
+def get_prescription_details(patient_id, nre):
+    """Get full prescription details."""
+    url = f"{BASE_URL}/api/v3/system-apis/prescriptions/{nre}"
+    
+    headers = {
+        "Connection": "keep-alive",
+        "Authorization": AUTH_HEADER,
+        "Accept-Language": "it-IT,it;q=0.9",
+        "Host": "recup-webapi-appmobile.regione.lazio.it",
+        "Accept": "*/*",
+        "Accept-Encoding": "gzip",
+        "User-Agent": "salutelazio/2.2.0 CFNetwork/3826.400.120 Darwin/24.3.0"
+    }
+    
+    params = {
+        "patientId": patient_id
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"Errore nell'ottenere i dettagli della prescrizione {nre}: {str(e)}")
+        return None
+
+def get_availabilities(patient_id, process_id, nre, order_ids):
+    """Get medical service availabilities."""
+    url = f"{BASE_URL}/api/v3/experience-apis/citizens/availabilities"
+    
+    headers = {
+        "Connection": "keep-alive",
+        "Authorization": AUTH_HEADER,
+        "Accept-Language": "it-IT,it;q=0.9",
+        "Host": "recup-webapi-appmobile.regione.lazio.it",
+        "Accept": "*/*",
+        "Accept-Encoding": "gzip",
+        "User-Agent": "salutelazio/2.2.0 CFNetwork/3826.400.120 Darwin/24.3.0"
+    }
+    
+    params = {
+        "personId": patient_id,
+        "processId": process_id,
+        "nre": nre,
+        "orderIds": order_ids,
+        "prescriptionPriority": "P",
+        "firstBy": "hospital-best-10"
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"Errore nell'ottenere le disponibilità per {nre}: {str(e)}")
+        return None 
+---- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\modules\booking_client.py ---- 
+import requests
+import base64
+import json
+import urllib3
+import time
+import os
+from datetime import datetime
+import logging
+
+# Importiamo il logger dal modulo principale
+from recup_monitor import logger
+
+# Disable SSL warnings
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Base configuration
+BASE_URL = "https://recup-webapi-appmobile.regione.lazio.it"
+AUTH_HEADER = "Basic QVBQTU9CSUxFX1NQRUNJQUw6UGs3alVTcDgzbUh4VDU4NA=="
+
+def book_appointment(process_id, data_prenotazione, diary_id, service_cur, nre, fiscal_code):
+    """
+    Perform prebooking for an appointment.
+    
+    This function creates a temporary hold on the appointment slot.
+    """
+    url = f"{BASE_URL}/api/v4/experience-apis/doctors/bpx/{process_id}/prebooking"
+    
+    headers = {
+        "Accept": "*/*",
+        "Content-Type": "application/json",
+        "Accept-Language": "it-IT,it;q=0.9",
+        "Authorization": AUTH_HEADER,
+        "Host": "recup-webapi-appmobile.regione.lazio.it",
+        "Connection": "keep-alive",
+        "User-Agent": "salutelazio/2.2.0 CFNetwork/3826.400.120 Darwin/24.3.0",
+        "Accept-Encoding": "gzip"
+    }
+    
+    payload = {
+        "date": data_prenotazione,
+        "diaryId": diary_id,
+        "requestId": "A0",
+        "supplyModeId": "A",
+        "extraServices": [],
+        "serviceCur": service_cur,
+        "exemptionId": "NE00",
+        "priority": "P",
+        "nre": nre,
+        "processId": process_id,
+        "personIdentifier": fiscal_code
+    }
+    
+    response = requests.post(url, headers=headers, json=payload, verify=False)
+    
+    # More detailed logging for debugging
+    logger.info(f"Pre-booking Status Code: {response.status_code}")
+    
+    if response.status_code != 201:  # The API returns 201 Created for successful prebookings
+        logger.error(f"Pre-booking Error Response: {response.text}")
+        raise Exception(f"Pre-booking failed with status code {response.status_code}")
+    
+    return response.json()
+
+def complete_booking(fiscal_code, process_id, nre, phone_number, email, lock_id, order_id, data_prenotazione, diary_id):
+    """
+    Complete the booking process after a successful prebooking.
+    
+    This function finalizes the appointment reservation.
+    """
+    url = f"{BASE_URL}/api/v4/process-apis/booking-management/bookings"
+    
+    headers = {
+        "Accept": "*/*",
+        "Content-Type": "application/json",
+        "Accept-Language": "it-IT,it;q=0.9",
+        "Authorization": AUTH_HEADER,
+        "Host": "recup-webapi-appmobile.regione.lazio.it",
+        "Connection": "keep-alive",
+        "User-Agent": "salutelazio/2.2.0 CFNetwork/3826.400.120 Darwin/24.3.0",
+        "Accept-Encoding": "gzip"
+    }
+    
+    # This payload structure matches what's needed for the API
+    payload = {
+        "prescriptionNumber": nre,
+        "processId": process_id,
+        "diaryId": diary_id,
+        "contacts": {
+            "phoneNumber": phone_number,
+            "email": email
+        },
+        "startTime": data_prenotazione,
+        "services": [{
+            "id": order_id,
+            "requestId": "A0"
+        }],
+        "lockId": lock_id,
+        "personIdentifier": fiscal_code,
+        "status": "PRENOTATA",
+        "supplyModeId": "A"
+    }
+    
+    response = requests.post(url, headers=headers, json=payload, verify=False)
+    
+    # Enhanced error handling and logging
+    logger.info(f"Complete Booking Status Code: {response.status_code}")
+    
+    if response.status_code != 200:
+        logger.error(f"Complete Booking Error Response: {response.text}")
+        raise Exception(f"Booking completion failed with status code {response.status_code}")
+    
+    result = response.json()
+    
+    # Extract booking ID with robust error handling
+    booking_id = None
+    if 'id' in result:
+        booking_id = result['id']
+    elif 'content' in result and result['content'] and 'id' in result['content'][0]:
+        booking_id = result['content'][0]['id']
+    else:
+        logger.warning("Could not find booking ID in response")
+        logger.debug(f"Response content: {result}")
+    
+    return result, booking_id
+
+def get_booking_document(booking_id, output_path=None):
+    """
+    Retrieve the booking document (PDF) and save it locally.
+    """
+    url = f"{BASE_URL}/api/v3/process-apis/booking-management/bookings/{booking_id}/documents"
+    
+    headers = {
+        "Accept": "*/*",
+        "Accept-Language": "it-IT,it;q=0.9",
+        "Authorization": AUTH_HEADER,
+        "Host": "recup-webapi-appmobile.regione.lazio.it",
+        "Connection": "keep-alive",
+        "User-Agent": "salutelazio/2.2.0 CFNetwork/3826.400.120 Darwin/24.3.0",
+        "Accept-Encoding": "gzip"
+    }
+    
+    response = requests.get(url, headers=headers, verify=False)
+    
+    # Enhanced error handling
+    if response.status_code != 200:
+        logger.error(f"Get Document Error: Status Code {response.status_code}")
+        logger.error(f"Response content: {response.text}")
+        raise Exception(f"Failed to retrieve booking document with status code {response.status_code}")
+    
+    # If we need to save the PDF
+    if output_path is None:
+        # Create a default filename with booking ID and timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = f"booking_{booking_id}_{timestamp}.pdf"
+    
+    # Save the PDF to disk
+    with open(output_path, 'wb') as f:
+        f.write(response.content)
+    
+    logger.info(f"Booking document saved to: {output_path}")
+    return output_path, response.content
+
+def cancel_booking(booking_id):
+    """
+    Cancel a specific booking.
+    """
+    logger.info(f"Tentativo di cancellazione prenotazione con ID: {booking_id}")
+    
+    url = f"{BASE_URL}/api/v3/process-apis/booking-management/bookings"
+    
+    headers = {
+        "Accept": "*/*",
+        "Content-Type": "application/json",
+        "Accept-Language": "it-IT,it;q=0.9",
+        "Authorization": AUTH_HEADER,
+        "Host": "recup-webapi-appmobile.regione.lazio.it",
+        "Connection": "keep-alive",
+        "User-Agent": "salutelazio/2.2.0 CFNetwork/3826.400.120 Darwin/24.3.0",
+        "Accept-Encoding": "gzip"
+    }
+    
+    # Payload per la cancellazione
+    payload = [{
+        "reasonId": 4,  # Reason code for cancellation
+        "bookingStatus": "ELIMINATA",
+        "identifiedBy": "ID_DI_SISTEMA",
+        "identifier": booking_id
+    }]
+    
+    logger.info(f"Payload cancellazione: {payload}")
+    
+    try:
+        response = requests.patch(url, headers=headers, json=payload, verify=False)
+        
+        # Log della risposta
+        logger.info(f"Status code risposta: {response.status_code}")
+        logger.info(f"Contenuto risposta: {response.text[:500]}")  # Limitiamo per sicurezza
+        
+        if response.status_code != 200:
+            logger.error(f"Errore nella cancellazione: {response.status_code}")
+            logger.error(f"Risposta errore: {response.text}")
+            raise Exception(f"Cancellazione prenotazione fallita con codice {response.status_code}")
+        
+        result = response.json()
+        logger.info(f"Risposta JSON: {result}")
+        
+        return result
+    except Exception as e:
+        logger.error(f"Eccezione durante la cancellazione: {str(e)}")
+        raise
+    
+def booking_workflow(fiscal_code, nre, phone_number, email, patient_id=None, process_id=None, slot_choice=0):
+    """
+    Complete booking workflow - from checking availability to booking and downloading confirmation.
+    
+    Parameters:
+    fiscal_code (str): The fiscal code of the patient
+    nre (str): The prescription number
+    phone_number (str): Contact phone number
+    email (str): Contact email
+    patient_id (str, optional): If already known, patient ID to skip a step
+    process_id (str, optional): If already known, process ID to skip a step
+    slot_choice (int, optional): Index of the slot to choose (0 = first available)
+    
+    Returns:
+    dict: Result of the booking operation with details
+    """
+    from modules.api_client import (
+        get_patient_info, get_doctor_info, check_prescription,
+        get_prescription_details, get_availabilities
+    )
+    
+    try:
+        # Step 1: Get patient information if not provided
+        if not patient_id:
+            patient_info = get_patient_info(fiscal_code)
+            if not patient_info or 'content' not in patient_info or not patient_info['content']:
+                return {"success": False, "message": f"Impossibile trovare informazioni per il paziente {fiscal_code}"}
+            patient_id = patient_info['content'][0]['id']
+            logger.info(f"Patient ID: {patient_id}")
+        
+        # Step 2: Get doctor information if not provided
+        if not process_id:
+            doctor_info = get_doctor_info(fiscal_code)
+            if not doctor_info or 'id' not in doctor_info:
+                return {"success": False, "message": f"Impossibile trovare informazioni per il medico del paziente {fiscal_code}"}
+            process_id = doctor_info['id']
+            logger.info(f"Process ID: {process_id}")
+        
+        # Step 3: Check prescription
+        check_prescription_result = check_prescription(patient_id, nre)
+        if not check_prescription_result:
+            return {"success": False, "message": f"Impossibile verificare la prescrizione {nre}"}
+        logger.info("Prescription Checked")
+        
+        # Step 4: Get prescription details
+        prescription_details = get_prescription_details(patient_id, nre)
+        if not prescription_details or 'details' not in prescription_details or not prescription_details['details']:
+            return {"success": False, "message": f"Impossibile ottenere i dettagli della prescrizione {nre}"}
+        
+        order_ids = prescription_details['details'][0]['service']['id']
+        service_cur = prescription_details['details'][0]['service']['code']
+        service_name = prescription_details['details'][0]['service'].get('description', 'Servizio non specificato')
+        logger.info(f"Order ID: {order_ids}")
+        
+        # Step 5: Get availabilities
+        availabilities = get_availabilities(patient_id, process_id, nre, order_ids)
+        if not availabilities or 'content' not in availabilities:
+            return {"success": False, "message": f"Impossibile ottenere le disponibilità per {nre}"}
+        
+        logger.info(f"Total available slots: {len(availabilities['content'])}")
+        
+        # Step 6: List and select slot
+        if not availabilities['content']:
+            return {"success": False, "message": "Nessuna disponibilità trovata per questa prescrizione"}
+        
+        # Sort slots by date to prioritize earlier dates
+        sorted_slots = sorted(availabilities['content'], key=lambda x: x['date'])
+        
+        # If slot_choice is out of range, use the first slot
+        if slot_choice >= len(sorted_slots):
+            slot_choice = 0
+            logger.warning(f"Slot choice {slot_choice} out of range, using first available slot")
+        
+        # Use the selected slot (or return availability list if slot_choice is -1)
+        if slot_choice == -1:
+            # Return the list of availabilities for user selection
+            slot_info = []
+            for i, slot in enumerate(sorted_slots):
+                slot_info.append({
+                    "index": i,
+                    "date": slot['date'],
+                    "hospital": slot.get('hospital', {}).get('name', 'Unknown'),
+                    "address": slot.get('site', {}).get('address', 'Unknown'),
+                    "price": slot.get('price', 'N/A')
+                })
+            return {
+                "success": True, 
+                "action": "list_slots",
+                "service": service_name,
+                "slots": slot_info,
+                "patient_id": patient_id,
+                "process_id": process_id
+            }
+        
+        # Get the selected slot
+        selected_slot = sorted_slots[slot_choice]
+        diary_id = selected_slot['diary']['id']
+        data_prenotazione = selected_slot['date']
+        
+        logger.info(f"Selected Appointment Details:")
+        logger.info(f"Date: {data_prenotazione}")
+        logger.info(f"Location: {selected_slot.get('hospital', {}).get('name', 'Unknown')}")
+        
+        # Step 7: Create pre-booking for the selected slot
+        try:
+            prebooking_result = book_appointment(
+                process_id, 
+                data_prenotazione, 
+                diary_id, 
+                service_cur, 
+                nre, 
+                fiscal_code
+            )
+            
+            lock_id = prebooking_result['id']
+            logger.info(f"Pre-booking successful. Lock ID: {lock_id}")
+            
+            # Step 8: Complete booking
+            booking_result, booking_id = complete_booking(
+                fiscal_code, 
+                process_id, 
+                nre, 
+                phone_number, 
+                email, 
+                lock_id, 
+                order_ids,
+                data_prenotazione,
+                diary_id
+            )
+            
+            if not booking_id:
+                return {"success": False, "message": "Prenotazione fallita: impossibile ottenere ID prenotazione"}
+            
+            logger.info(f"Booking completed. Booking ID: {booking_id}")
+            
+            # Step 9: Download the booking confirmation PDF
+            pdf_path, pdf_content = get_booking_document(booking_id)
+            
+            # Step 10: Return booking information
+            return {
+                "success": True,
+                "action": "booked",
+                "booking_id": booking_id,
+                "pdf_path": pdf_path,
+                "pdf_content": pdf_content,
+                "appointment_date": data_prenotazione,
+                "hospital": selected_slot.get('hospital', {}).get('name', 'Unknown'),
+                "address": selected_slot.get('site', {}).get('address', 'Unknown'),
+                "service": service_name
+            }
+        
+        except Exception as e:
+            logger.error(f"Error booking slot {data_prenotazione}: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return {"success": False, "message": f"Errore durante la prenotazione: {str(e)}"}
+            
+    except Exception as e:
+        logger.error(f"An error occurred in booking workflow: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return {"success": False, "message": f"Errore durante il processo di prenotazione: {str(e)}"}
+
+def get_user_bookings(fiscal_code):
+    """
+    Get a list of active bookings for a user.
+    
+    Parameters:
+    fiscal_code (str): The fiscal code of the patient
+    
+    Returns:
+    list: List of active bookings
+    """
+    url = f"{BASE_URL}/api/v3/process-apis/booking-management/bookings/search"
+    
+    headers = {
+        "Accept": "*/*", 
+        "Content-Type": "application/json",
+        "Accept-Language": "it-IT,it;q=0.9",
+        "Authorization": AUTH_HEADER,
+        "Host": "recup-webapi-appmobile.regione.lazio.it",
+        "Connection": "keep-alive",
+        "User-Agent": "salutelazio/2.2.0 CFNetwork/3826.400.120 Darwin/24.3.0",
+        "Accept-Encoding": "gzip"
+    }
+    
+    payload = {
+        "fiscalCode": fiscal_code,
+        "statuses": ["PRENOTATA", "PRESA_IN_CARICO"]
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=payload, verify=False)
+        response.raise_for_status()
+        
+        result = response.json()
+        
+        if 'content' in result:
+            return {
+                "success": True,
+                "bookings": result['content']
+            }
+        else:
+            return {
+                "success": True,
+                "bookings": []
+            }
+    except Exception as e:
+        logger.error(f"Error getting user bookings: {str(e)}")
+        return {
+            "success": False,
+            "message": f"Errore nel recupero delle prenotazioni: {str(e)}"
+        } 
+---- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\modules\bot_handlers.py ---- 
+import re
 import asyncio
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
@@ -16,13 +1091,12 @@ from io import BytesIO
 
 # Importiamo le variabili globali dal modulo principale
 from config import (
-    logger, user_data, authorized_users, MAIN_KEYBOARD,
+    logger, user_data, authorized_users,
     WAITING_FOR_FISCAL_CODE, WAITING_FOR_NRE, CONFIRM_ADD,
     WAITING_FOR_PRESCRIPTION_TO_DELETE, WAITING_FOR_PRESCRIPTION_TO_TOGGLE,
     WAITING_FOR_DATE_FILTER, WAITING_FOR_MONTHS_LIMIT, CONFIRM_DATE_FILTER,
     WAITING_FOR_BOOKING_CHOICE, WAITING_FOR_BOOKING_CONFIRMATION, WAITING_FOR_PHONE,
-    WAITING_FOR_EMAIL, WAITING_FOR_SLOT_CHOICE, WAITING_FOR_BOOKING_TO_CANCEL, WAITING_FOR_AUTO_BOOK_CHOICE, AUTHORIZING,
-    WAITING_FOR_PRESCRIPTION_BLACKLIST, WAITING_FOR_HOSPITAL_SELECTION
+    WAITING_FOR_EMAIL, WAITING_FOR_SLOT_CHOICE, WAITING_FOR_BOOKING_TO_CANCEL, WAITING_FOR_AUTO_BOOK_CHOICE, AUTHORIZING
 )
 
 # Importiamo le funzioni da altri moduli
@@ -90,415 +1164,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.warning(f"Tentativo di accesso non autorizzato da {user_id}")
         return
     
-
+    # Creiamo una tastiera personalizzata con tutte le funzionalità
+    keyboard = [
+        ["➕ Aggiungi Prescrizione", "➖ Rimuovi Prescrizione"],
+        ["📋 Lista Prescrizioni", "🔄 Verifica Disponibilità"],
+        ["🔔 Gestisci Notifiche", "⏱ Imposta Filtro Date"],
+        ["🏥 Prenota", "🤖 Prenota Automaticamente"],
+        ["📝 Le mie Prenotazioni", "ℹ️ Informazioni"],
+        ["🔑 Autorizza Utente"]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
     await update.message.reply_text(
         f"👋 Benvenuto, {update.effective_user.first_name}!\n\n"
         "Questo bot ti aiuterà a monitorare le disponibilità del Servizio Sanitario Nazionale.\n\n"
         "Utilizza i pulsanti sotto per gestire le prescrizioni da monitorare.",
-        reply_markup=MAIN_KEYBOARD
+        reply_markup=reply_markup
     )
     
 # =============================================================================
 # GESTORI PRESCRIZIONI: AGGIUNTA
 # =============================================================================
-
-async def manage_hospital_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Gestisce la blacklist degli ospedali per una prescrizione."""
-    user_id = update.effective_user.id
-    
-    # Controlliamo se l'utente è autorizzato
-    if str(user_id) not in authorized_users:
-        await update.message.reply_text("🔒 Non sei autorizzato ad utilizzare questa funzione.")
-        return
-    
-    # Carichiamo le prescrizioni
-    prescriptions = load_input_data()
-    
-    # Filtriamo solo le prescrizioni dell'utente o tutte se è admin
-    is_admin = user_id == int(authorized_users[0]) if authorized_users else False
-    user_prescriptions = []
-    
-    if is_admin:
-        user_prescriptions = prescriptions
-    else:
-        user_prescriptions = [p for p in prescriptions if p.get("telegram_chat_id") == user_id]
-    
-    if not user_prescriptions:
-        await update.message.reply_text("⚠️ Non hai prescrizioni da gestire.")
-        return ConversationHandler.END
-    
-    # Costruiamo il corpo del messaggio con le informazioni dettagliate
-    message = "🚫 <b>Blacklist Ospedali</b>\n\nSeleziona la prescrizione:\n\n"
-    
-    for idx, prescription in enumerate(user_prescriptions):
-        desc = prescription.get("description", "Prescrizione")
-        fiscal_code = prescription["fiscal_code"]
-        
-        # Mostriamo il numero di ospedali in blacklist
-        blacklist_count = len(prescription.get("config", {}).get("hospitals_blacklist", []))
-        blacklist_status = f"{blacklist_count} ospedali esclusi" if blacklist_count else "nessun ospedale escluso"
-        
-        message += f"{idx+1}. <b>{desc}</b>\n"
-        message += f"   CF: {fiscal_code} • {blacklist_status}\n\n"
-    
-    # Creiamo pulsanti più semplici e compatti
-    keyboard = []
-    
-    for idx, _ in enumerate(user_prescriptions):
-        keyboard.append([
-            InlineKeyboardButton(
-                f"{idx+1}",  # Solo il numero
-                callback_data=f"blacklist_{idx}"
-            )
-        ])
-    
-    keyboard.append([InlineKeyboardButton("❌ Annulla", callback_data="cancel_blacklist")])
-    
-    # Salviamo le prescrizioni nei dati dell'utente
-    user_data[user_id] = {
-        "action": "manage_hospital_blacklist",
-        "prescriptions": user_prescriptions
-    }
-    
-    await update.message.reply_text(
-        message,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="HTML"
-    )
-    
-    return WAITING_FOR_PRESCRIPTION_BLACKLIST
-    
-async def handle_prescription_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Gestisce la selezione della prescrizione per modificare la blacklist."""
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = query.from_user.id
-    callback_data = query.data
-    
-    logger.info(f"Gestione blacklist: callback_data={callback_data}")
-    
-    if callback_data == "cancel_blacklist":
-        await query.edit_message_text("❌ Operazione annullata.")
-        # Puliamo i dati dell'utente
-        user_data.pop(user_id, None)
-        return ConversationHandler.END
-    
-    # Estraiamo l'indice della prescrizione
-    idx = int(callback_data.split("_")[1])
-    user_prescriptions = user_data[user_id]["prescriptions"]
-    
-    # Controlliamo che l'indice sia valido
-    if idx < 0 or idx >= len(user_prescriptions):
-        await query.edit_message_text("⚠️ Prescrizione non valida.")
-        user_data.pop(user_id, None)
-        return ConversationHandler.END
-    
-    # Otteniamo la prescrizione
-    prescription = user_prescriptions[idx]
-    user_data[user_id]["selected_prescription"] = prescription
-    
-    # Carichiamo il database delle location
-    location_db = {}
-    locations_file = "../locations.json"  # Vai indietro di una directory
-
-    logger.info(f"Tentativo di caricare il file locations: {locations_file}")
-    
-    try:
-        if os.path.exists(locations_file):
-            with open(locations_file, "r") as f:
-                location_db = json.load(f)
-                logger.info(f"File locations caricato con successo. Trovate {len(location_db)} location.")
-        else:
-            logger.warning(f"File locations non trovato: {locations_file}")
-            # Proviamo un percorso alternativo
-            alternative_path = "locations.json"  # Prova anche nella directory corrente
-            if os.path.exists(alternative_path):
-                with open(alternative_path, "r") as f:
-                    location_db = json.load(f)
-                    logger.info(f"File locations caricato dal percorso alternativo. Trovate {len(location_db)} location.")
-            else:
-                logger.warning(f"File locations non trovato neanche nel percorso alternativo")
-    except Exception as e:
-        logger.error(f"Errore nel caricare il database delle location: {str(e)}")
-    
-    # Estraiamo i nomi degli ospedali dal database delle location
-    # MODIFICA: Adattata alla struttura del tuo file locations.json
-    hospitals = []
-    
-    for key, location in location_db.items():
-        # In questo caso, usiamo il campo "hospital" nella struttura nidificata
-        hospital_name = location.get("hospital", "")
-        if hospital_name and hospital_name not in hospitals:
-            hospitals.append(hospital_name)
-    
-    logger.info(f"Estratti {len(hospitals)} ospedali unici dal database.")
-    
-    # Se non ci sono ospedali, mostriamo un messaggio
-    if not hospitals:
-        # Per debug, mostriamo le chiavi del primo elemento del database
-        debug_info = ""
-        if location_db:
-            first_key = next(iter(location_db))
-            first_item = location_db[first_key]
-            debug_info = f"\n\nStruttura del primo elemento:\n{first_key}: {first_item}"
-        
-        await query.edit_message_text(
-            f"⚠️ Nessun ospedale trovato nel database.{debug_info}\n\n"
-            f"Controlla la struttura del file locations.json o\n"
-            f"usa la funzione 'Verifica Disponibilità' per popolare il database."
-        )
-        user_data.pop(user_id, None)
-        return ConversationHandler.END
-    
-    # Ordiniamo gli ospedali alfabeticamente
-    hospitals.sort()
-    
-    # Otteniamo la blacklist attuale
-    current_blacklist = prescription.get("config", {}).get("hospitals_blacklist", [])
-    logger.info(f"Blacklist attuale: {current_blacklist}")
-    
-    # Implementiamo una paginazione semplice
-    hospitals_per_page = 10
-    total_pages = (len(hospitals) + hospitals_per_page - 1) // hospitals_per_page
-    
-    # Salviamo i dati temporanei
-    user_data[user_id]["hospitals"] = hospitals
-    user_data[user_id]["current_blacklist"] = current_blacklist.copy()
-    user_data[user_id]["page"] = 0
-    
-    # Mostriamo la prima pagina
-    return await show_hospitals_page(query, user_id)
-
-async def show_hospitals_page(query, user_id):
-    """Mostra una pagina di ospedali."""
-    hospitals = user_data[user_id]["hospitals"]
-    current_blacklist = user_data[user_id]["current_blacklist"]
-    page = user_data[user_id].get("page", 0)  # Default alla prima pagina
-    prescription = user_data[user_id]["selected_prescription"]
-    
-    # Numero di ospedali per pagina
-    hospitals_per_page = 10
-    total_pages = (len(hospitals) + hospitals_per_page - 1) // hospitals_per_page
-    
-    # Calcola gli indici per la pagina corrente
-    start_idx = page * hospitals_per_page
-    end_idx = min(start_idx + hospitals_per_page, len(hospitals))
-    
-    # Costruisci il messaggio con la lista numerata degli ospedali
-    message_text = (
-        f"🚫 <b>Blacklist Ospedali</b>\n\n"
-        f"Prescrizione: <b>{prescription.get('description', 'N/D')}</b>\n\n"
-        f"<b>Seleziona gli ospedali da escludere:</b>\n"
-        f"❌ = Escluso | ✅ = Incluso\n\n"
-    )
-    
-    # Aggiungi gli ospedali al messaggio
-    for i, idx in enumerate(range(start_idx, end_idx)):
-        hospital = hospitals[idx]
-        is_blacklisted = hospital in current_blacklist
-        status = "❌" if is_blacklisted else "✅"
-        message_text += f"{i+1}. {status} {hospital}\n"
-    
-    message_text += f"\nPagina {page+1}/{total_pages} • Ospedali esclusi: {len(current_blacklist)}"
-    
-    # Crea i pulsanti compatti (solo numeri)
-    keyboard = []
-    current_row = []
-    
-    for i, idx in enumerate(range(start_idx, end_idx)):
-        hospital = hospitals[idx]
-        is_blacklisted = hospital in current_blacklist
-        button_text = f"{i+1}"  # Solo il numero
-        
-        # Aggiungi un indicatore visivo allo stato
-        if is_blacklisted:
-            button_text = f"❌{i+1}"
-        else:
-            button_text = f"✅{i+1}"
-        
-        current_row.append(InlineKeyboardButton(
-            button_text,
-            callback_data=f"toggle_hospital_{idx}_{is_blacklisted}"
-        ))
-        
-        # 5 pulsanti per riga
-        if len(current_row) == 5:
-            keyboard.append(current_row)
-            current_row = []
-    
-    # Aggiungi l'ultima riga se c'è
-    if current_row:
-        keyboard.append(current_row)
-    
-    # Pulsanti di navigazione
-    navigation = []
-    
-    if page > 0:
-        navigation.append(InlineKeyboardButton("⬅️", callback_data="page_prev"))
-    
-    navigation.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="dummy"))
-    
-    if page < total_pages - 1:
-        navigation.append(InlineKeyboardButton("➡️", callback_data="page_next"))
-    
-    keyboard.append(navigation)
-    
-    # Pulsanti per conferma/annulla
-    keyboard.append([
-        InlineKeyboardButton("✅ Conferma", callback_data="confirm_blacklist"),
-        InlineKeyboardButton("❌ Annulla", callback_data="cancel_blacklist")
-    ])
-    
-    try:
-        await query.edit_message_text(
-            message_text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="HTML"
-        )
-    except Exception as e:
-        logger.error(f"Errore nell'aggiornare il messaggio: {str(e)}")
-        try:
-            # Potrebbe esserci un problema se il messaggio non è cambiato
-            message_text += "\u200B"  # Carattere zero-width space
-            await query.edit_message_text(
-                message_text,
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode="HTML"
-            )
-        except Exception as e2:
-            logger.error(f"Secondo errore nell'aggiornare il messaggio: {str(e2)}")
-    
-    return WAITING_FOR_HOSPITAL_SELECTION
-    
-async def handle_hospital_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Gestisce la selezione di un ospedale per aggiungerlo/rimuoverlo dalla blacklist."""
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = query.from_user.id
-    callback_data = query.data
-    
-    logger.info(f"Hospital selection callback: {callback_data}")
-    
-    if callback_data == "cancel_blacklist":
-        await query.edit_message_text("❌ Operazione annullata.")
-        # Puliamo i dati dell'utente
-        user_data.pop(user_id, None)
-        return ConversationHandler.END
-    
-    if callback_data == "confirm_blacklist":
-        # Aggiorniamo la blacklist nella prescrizione
-        return await confirm_hospital_blacklist(update, context)
-    
-    # Gestione delle pagine
-    if callback_data == "page_prev":
-        if "page" in user_data[user_id]:
-            user_data[user_id]["page"] = max(0, user_data[user_id]["page"] - 1)
-        else:
-            user_data[user_id]["page"] = 0
-        return await show_hospitals_page(query, user_id)
-    
-    if callback_data == "page_next":
-        if "page" not in user_data[user_id]:
-            user_data[user_id]["page"] = 0
-        
-        hospitals = user_data[user_id]["hospitals"]
-        hospitals_per_page = 10
-        total_pages = (len(hospitals) + hospitals_per_page - 1) // hospitals_per_page
-        
-        user_data[user_id]["page"] = min(user_data[user_id]["page"] + 1, total_pages - 1)
-        return await show_hospitals_page(query, user_id)
-    
-    # Estraiamo i dati dalla callback per toggle hospital
-    if callback_data.startswith("toggle_hospital_"):
-        parts = callback_data.split("_")
-        hospital_idx = int(parts[2])
-        is_blacklisted = parts[3] == "True"
-        
-        # Otteniamo i dati necessari
-        hospitals = user_data[user_id]["hospitals"]
-        current_blacklist = user_data[user_id]["current_blacklist"]
-        
-        # Controlliamo che l'indice sia valido
-        if hospital_idx < 0 or hospital_idx >= len(hospitals):
-            await query.edit_message_text("⚠️ Ospedale non valido.")
-            return WAITING_FOR_HOSPITAL_SELECTION
-        
-        # Otteniamo il nome dell'ospedale
-        hospital_name = hospitals[hospital_idx]
-        
-        # Aggiorniamo la blacklist
-        if is_blacklisted:
-            # Rimuoviamo dalla blacklist
-            if hospital_name in current_blacklist:
-                current_blacklist.remove(hospital_name)
-        else:
-            # Aggiungiamo alla blacklist
-            if hospital_name not in current_blacklist:
-                current_blacklist.append(hospital_name)
-        
-        # Aggiorniamo i dati dell'utente
-        user_data[user_id]["current_blacklist"] = current_blacklist
-        
-        # Mostriamo la pagina aggiornata
-        return await show_hospitals_page(query, user_id)
-    
-    # Se arriviamo qui, è una callback non gestita
-    logger.warning(f"Callback non gestita: {callback_data}")
-    return WAITING_FOR_HOSPITAL_SELECTION
-    
-
-async def confirm_hospital_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Conferma e salva la blacklist degli ospedali."""
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = query.from_user.id
-    
-    # Otteniamo i dati necessari
-    prescription = user_data[user_id]["selected_prescription"]
-    current_blacklist = user_data[user_id]["current_blacklist"]
-    
-    # Carichiamo tutte le prescrizioni
-    all_prescriptions = load_input_data()
-    
-    # Cerchiamo la prescrizione nel dataset completo
-    updated = False
-    for p in all_prescriptions:
-        if (p["fiscal_code"] == prescription["fiscal_code"] and 
-            p["nre"] == prescription["nre"]):
-            
-            # Assicuriamo che esista la configurazione
-            if "config" not in p:
-                p["config"] = {}
-            
-            # Aggiorniamo la blacklist
-            p["config"]["hospitals_blacklist"] = current_blacklist
-            
-            updated = True
-            break
-    
-    if updated:
-        # Salviamo le prescrizioni aggiornate
-        save_input_data(all_prescriptions)
-        
-        # Aggiorniamo il messaggio
-        await query.edit_message_text(
-            f"✅ Blacklist aggiornata per:\n\n"
-            f"Descrizione: {prescription.get('description', 'Non disponibile')}\n"
-            f"Codice Fiscale: {prescription['fiscal_code']}\n"
-            f"NRE: {prescription['nre']}\n\n"
-            f"Ospedali esclusi: {len(current_blacklist)}\n"
-            f"Ora riceverai notifiche solo per ospedali non presenti nella blacklist."
-        )
-    else:
-        await query.edit_message_text("⚠️ Impossibile aggiornare la blacklist.")
-    
-    # Puliamo i dati dell'utente
-    user_data.pop(user_id, None)
-    
-    return ConversationHandler.END
 
 async def add_prescription(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Gestisce l'aggiunta di una nuova prescrizione."""
@@ -539,10 +1225,18 @@ async def cancel_operation(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Cancellazione da un messaggio di testo
             user_id = update.effective_user.id
             # Ripristiniamo la tastiera principale
+            main_keyboard = ReplyKeyboardMarkup([
+                ["➕ Aggiungi Prescrizione", "➖ Rimuovi Prescrizione"],
+                ["📋 Lista Prescrizioni", "🔄 Verifica Disponibilità"],
+                ["🔔 Gestisci Notifiche", "⏱ Imposta Filtro Date"],
+                ["🏥 Prenota", "🤖 Prenota Automaticamente"],
+                ["📝 Le mie Prenotazioni", "ℹ️ Informazioni"],
+                ["🔑 Autorizza Utente"]
+            ], resize_keyboard=True)
             
             await update.message.reply_text(
                 "❌ Operazione annullata. Cosa vuoi fare?",
-                reply_markup=MAIN_KEYBOARD
+                reply_markup=main_keyboard
             )
         
         # Puliamo i dati dell'utente solo se abbiamo l'ID utente
@@ -676,14 +1370,14 @@ async def handle_add_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Verifica che i dati dell'utente siano corretti
     if user_id not in user_data:
         await update.message.reply_text(
-            "⚠️ Si è verificato un errore nella sessione. Per favore, ricomincia l'operazione o premi /cancel."
+            "⚠️ Si è verificato un errore nella sessione. Per favore, ricomincia l'operazione."
         )
         return ConversationHandler.END
     
     # Verifica che sia l'azione corretta
     if user_data[user_id].get("action") != "add_prescription":
         await update.message.reply_text(
-            "⚠️ Azione non corretta. Per favore, ricomincia l'operazione o premi /cancel."
+            "⚠️ Azione non corretta. Per favore, ricomincia l'operazione."
         )
         user_data.pop(user_id, None)
         return ConversationHandler.END
@@ -798,12 +1492,21 @@ async def confirm_add_prescription(update: Update, context: ContextTypes.DEFAULT
         f"Riceverai notifiche quando saranno disponibili nuovi appuntamenti."
     )
     
-
+    # Suggerimento per la prenotazione automatica
+    main_keyboard = ReplyKeyboardMarkup([
+        ["➕ Aggiungi Prescrizione", "➖ Rimuovi Prescrizione"],
+        ["📋 Lista Prescrizioni", "🔄 Verifica Disponibilità"],
+        ["🔔 Gestisci Notifiche", "⏱ Imposta Filtro Date"],
+        ["🏥 Prenota", "🤖 Prenota Automaticamente"],
+        ["📝 Le mie Prenotazioni", "ℹ️ Informazioni"],
+        ["🔑 Autorizza Utente"]
+    ], resize_keyboard=True)
+    
     await context.bot.send_message(
         chat_id=user_id,
         text="💡 Suggerimento: puoi attivare la prenotazione automatica usando la funzione '🤖 Prenota Automaticamente' "
              "per prenotare automaticamente il primo slot disponibile.",
-        reply_markup=MAIN_KEYBOARD
+        reply_markup=main_keyboard
     )
     
     # Puliamo i dati dell'utente
@@ -1242,24 +1945,18 @@ async def book_prescription(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Non hai prescrizioni da prenotare.")
         return ConversationHandler.END
     
-    # Costruiamo il corpo del messaggio con le informazioni dettagliate
-    message = "🏥 <b>Prenotazione</b>\n\nSeleziona la prescrizione da prenotare:\n\n"
+    # Creiamo i pulsanti per le prescrizioni
+    keyboard = []
     
     for idx, prescription in enumerate(user_prescriptions):
         desc = prescription.get("description", "Prescrizione")
         fiscal_code = prescription["fiscal_code"]
         nre = prescription["nre"]
         
-        message += f"{idx+1}. <b>{desc}</b>\n"
-        message += f"   CF: <code>{fiscal_code}</code> • NRE: <code>{nre}</code>\n\n"
-    
-    # Creiamo pulsanti più semplici e compatti
-    keyboard = []
-    
-    for idx, _ in enumerate(user_prescriptions):
+        # Creiamo un pulsante con identificativo della prescrizione
         keyboard.append([
             InlineKeyboardButton(
-                f"{idx+1}",  # Solo il numero
+                f"{idx+1}. {desc[:30]}... ({fiscal_code[-4:]})",
                 callback_data=f"book_{idx}"
             )
         ])
@@ -1274,13 +1971,12 @@ async def book_prescription(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     
     await update.message.reply_text(
-        message,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="HTML"
+        "Seleziona la prescrizione da prenotare:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
     
     return WAITING_FOR_BOOKING_CHOICE
-    
+
 async def handle_booking_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -2563,14 +3259,11 @@ async def show_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔄 <b>Verifica Disponibilità</b> - Controlla subito le disponibilità\n"
         "🔔 <b>Gestisci Notifiche</b> - Attiva/disattiva notifiche per una prescrizione\n"
         "⏱ <b>Imposta Filtro Date</b> - Filtra le notifiche entro un periodo di mesi\n"
-        "🚫 <b>Blacklist Ospedali</b> - Escludi ospedali specifici dalle notifiche\n"
         "🏥 <b>Prenota</b> - Prenota un appuntamento per una prescrizione\n"
         "🤖 <b>Prenota Automaticamente</b> - Attiva/disattiva la prenotazione automatica\n"
         "📝 <b>Le mie Prenotazioni</b> - Visualizza e gestisci le prenotazioni attive\n\n"
         "<b>Prenotazione Automatica:</b>\n"
         "Quando attivi la prenotazione automatica per una prescrizione, il bot prenota automaticamente il primo slot disponibile utilizzando i dati di contatto salvati, senza richiedere ulteriori conferme.\n\n"
-        "<b>Blacklist Ospedali:</b>\n"
-        "Puoi escludere specifici ospedali dalle notifiche per ogni prescrizione, ricevendo avvisi solo per le strutture che ti interessano.\n\n"
         "<b>Frequenza di controllo:</b> Ogni 5 minuti\n\n"
         "<b>Note:</b>\n"
         "• Il bot notifica solo quando ci sono cambiamenti significativi\n"
@@ -2671,12 +3364,21 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"Primo utente {user_id} aggiunto come amministratore")
             
             # Inviamo un messaggio di benvenuto come amministratore
-
+            keyboard = [
+                ["➕ Aggiungi Prescrizione", "➖ Rimuovi Prescrizione"],
+                ["📋 Lista Prescrizioni", "🔄 Verifica Disponibilità"],
+                ["🔔 Gestisci Notifiche", "⏱ Imposta Filtro Date"],
+                ["🏥 Prenota", "🤖 Prenota Automaticamente"],
+                ["📝 Le mie Prenotazioni", "ℹ️ Informazioni"],
+                ["🔑 Autorizza Utente"]
+            ]
+            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            
             await update.message.reply_text(
                 f"👑 Benvenuto, {update.effective_user.first_name}!\n\n"
                 "Sei stato impostato come amministratore del bot.\n\n"
                 "Questo bot ti aiuterà a monitorare le disponibilità del Servizio Sanitario Nazionale.",
-                reply_markup=MAIN_KEYBOARD
+                reply_markup=reply_markup
             )
             return
         else:
@@ -2706,15 +3408,20 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await list_bookings(update, context)
     elif text == "ℹ️ Informazioni":
         return await show_info(update, context)
-    elif text == "🚫 Blacklist Ospedali":
-        return await manage_hospital_blacklist(update, context)
     elif text == "🔑 Autorizza Utente":
         return await authorize_user(update, context)
     else:
         # Messaggio di default con la tastiera aggiornata
         await update.message.reply_text(
             "Usa i pulsanti sotto per interagire con il bot.",
-            reply_markup=MAIN_KEYBOARD
+            reply_markup=ReplyKeyboardMarkup([
+                ["➕ Aggiungi Prescrizione", "➖ Rimuovi Prescrizione"],
+                ["📋 Lista Prescrizioni", "🔄 Verifica Disponibilità"],
+                ["🔔 Gestisci Notifiche", "⏱ Imposta Filtro Date"],
+                ["🏥 Prenota", "🤖 Prenota Automaticamente"],
+                ["📝 Le mie Prenotazioni", "ℹ️ Informazioni"],
+                ["🔑 Autorizza Utente"]
+            ], resize_keyboard=True)
         )
 
 async def error_handler(update, context):
@@ -2750,12 +3457,20 @@ async def error_handler(update, context):
     
     # Ripristina la tastiera principale se possibile
     if update and update.effective_chat and update.effective_user:
-
+        main_keyboard = ReplyKeyboardMarkup([
+            ["➕ Aggiungi Prescrizione", "➖ Rimuovi Prescrizione"],
+            ["📋 Lista Prescrizioni", "🔄 Verifica Disponibilità"],
+            ["🔔 Gestisci Notifiche", "⏱ Imposta Filtro Date"],
+            ["🏥 Prenota", "🤖 Prenota Automaticamente"],
+            ["📝 Le mie Prenotazioni", "ℹ️ Informazioni"],
+            ["🔑 Autorizza Utente"]
+        ], resize_keyboard=True)
+        
         try:
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
                 text="🔄 Sessione ripristinata. Seleziona un'operazione:",
-                reply_markup=MAIN_KEYBOARD
+                reply_markup=main_keyboard
             )
         except Exception as e:
             logger.error(f"Errore nel ripristino della tastiera: {e}")
@@ -2772,8 +3487,15 @@ async def error_recovery(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         "⚠️ Si è verificato un problema con l'operazione corrente. "
-        "Per favore, ricomincia o premi /cancel.",
-        reply_markup=MAIN_KEYBOARD
+        "Per favore, ricomincia.",
+        reply_markup=ReplyKeyboardMarkup([
+            ["➕ Aggiungi Prescrizione", "➖ Rimuovi Prescrizione"],
+            ["📋 Lista Prescrizioni", "🔄 Verifica Disponibilità"],
+            ["🔔 Gestisci Notifiche", "⏱ Imposta Filtro Date"],
+            ["🏥 Prenota", "🤖 Prenota Automaticamente"],
+            ["📝 Le mie Prenotazioni", "ℹ️ Informazioni"],
+            ["🔑 Autorizza Utente"]
+        ], resize_keyboard=True)
     )
     
     return ConversationHandler.END
@@ -2859,17 +3581,7 @@ def setup_handlers(application):
                 CallbackQueryHandler(handle_booking_to_cancel, pattern="^cancel_book_"),
                 CallbackQueryHandler(confirm_cancel_booking, pattern="^confirm_cancel_"),
                 CallbackQueryHandler(cancel_operation, pattern="^cancel_cancel_book$")
-            ],
-            WAITING_FOR_PRESCRIPTION_BLACKLIST: [
-                CallbackQueryHandler(handle_prescription_blacklist, pattern="^blacklist_"),
-                CallbackQueryHandler(cancel_operation, pattern="^cancel_")
-            ],
-            WAITING_FOR_HOSPITAL_SELECTION: [
-                CallbackQueryHandler(handle_hospital_selection, pattern="^toggle_hospital_"),
-                CallbackQueryHandler(handle_hospital_selection, pattern="^page_"),
-                CallbackQueryHandler(confirm_hospital_blacklist, pattern="^confirm_blacklist"),
-                CallbackQueryHandler(cancel_operation, pattern="^cancel_")
-            ],
+            ]
         },
         fallbacks=[
             CommandHandler("cancel", cancel_operation),
@@ -2906,4 +3618,1050 @@ def setup_handlers(application):
     
     # Gestore errori
     application.add_error_handler(error_handler)
+     
+---- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\modules\data_utils.py ---- 
+import os
+import json
+import logging
+from datetime import datetime, timedelta
+import fcntl
+
+# Importa costanti e configurazioni dal modulo config
+from config import (
+    logger, INPUT_FILE, PREVIOUS_DATA_FILE, USERS_FILE,
+    authorized_users
+)
+
+def load_authorized_users_with_lock():
+    """Carica gli utenti autorizzati dal file con lock."""
+    global authorized_users
+    try:
+        if os.path.exists(USERS_FILE):
+            with open(USERS_FILE, 'r') as f:
+                # Acquisiamo un lock condiviso per la lettura
+                fcntl.flock(f, fcntl.LOCK_SH)
+                try:
+                    loaded_users = json.load(f)
+                    if loaded_users:
+                        authorized_users.clear()
+                        authorized_users.extend(loaded_users)
+                        logger.info(f"Caricati {len(authorized_users)} utenti autorizzati")
+                finally:
+                    # Rilasciamo il lock
+                    fcntl.flock(f, fcntl.LOCK_UN)
+        else:
+            # Se il file non esiste, lo creiamo
+            with open(USERS_FILE, 'w') as f:
+                # Acquisiamo un lock esclusivo per la scrittura
+                fcntl.flock(f, fcntl.LOCK_EX)
+                try:
+                    json.dump(authorized_users, f)
+                finally:
+                    fcntl.flock(f, fcntl.LOCK_UN)
+            logger.info("Creato nuovo file di utenti autorizzati")
+    except Exception as e:
+        logger.error(f"Errore nel caricare gli utenti autorizzati: {str(e)}")
+
+def save_authorized_users_with_lock():
+    """Salva gli utenti autorizzati su file con lock."""
+    try:
+        with open(USERS_FILE, 'w') as f:
+            # Acquisiamo un lock esclusivo
+            fcntl.flock(f, fcntl.LOCK_EX)
+            try:
+                json.dump(authorized_users, f, indent=2)
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
+        logger.info("Utenti autorizzati salvati con successo")
+    except Exception as e:
+        logger.error(f"Errore nel salvare gli utenti autorizzati: {str(e)}")
+
+def load_authorized_users():
+    """Carica gli utenti autorizzati dal file."""
+    global authorized_users
+    try:
+        if os.path.exists(USERS_FILE):
+            with open(USERS_FILE, 'r') as f:
+                loaded_users = json.load(f)
+                if loaded_users:  # Verifichiamo che il file contenga utenti
+                    authorized_users.clear()  # Solo se abbiamo caricato utenti validi
+                    authorized_users.extend(loaded_users)
+                    logger.info(f"Caricati {len(authorized_users)} utenti autorizzati")
+                else:
+                    logger.warning("File utenti autorizzati vuoto, mantengo utenti esistenti")
+        else:
+            # Se il file non esiste, lo creiamo con gli utenti attuali (se presenti)
+            with open(USERS_FILE, 'w') as f:
+                json.dump(authorized_users, f)
+            logger.info(f"Creato nuovo file con {len(authorized_users)} utenti autorizzati")
+    except Exception as e:
+        logger.error(f"Errore nel caricare gli utenti autorizzati: {str(e)}")
+
+def save_authorized_users():
+    """Salva gli utenti autorizzati su file."""
+    try:
+        with open(USERS_FILE, 'w') as f:
+            json.dump(authorized_users, f, indent=2)
+        logger.info("Utenti autorizzati salvati con successo")
+    except Exception as e:
+        logger.error(f"Errore nel salvare gli utenti autorizzati: {str(e)}")
+
+def format_date(date_string):
+    """Formatta la data ISO in un formato più leggibile."""
+    try:
+        # Parse della data ISO
+        dt = datetime.strptime(date_string, "%Y-%m-%dT%H:%M:%SZ")
+        # Formatta la data in italiano
+        weekdays = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato", "Domenica"]
+        months = ["Gennaio", "Febbraio", "Marzo", "Aprile", "Maggio", "Giugno", 
+                  "Luglio", "Agosto", "Settembre", "Ottobre", "Novembre", "Dicembre"]
+        
+        weekday = weekdays[dt.weekday()]
+        day = dt.day
+        month = months[dt.month - 1]
+        year = dt.year
+        time = dt.strftime("%H:%M")
+        
+        return f"{weekday} {day} {month} {year}, ore {time}"
+    except Exception as e:
+        logger.warning(f"Errore nella formattazione della data {date_string}: {str(e)}")
+        return date_string
+
+def is_date_within_range(date_str, months_limit=None):
+    """
+    Verifica se una data è compresa nell'intervallo di oggi fino a X mesi.
     
+    Args:
+        date_str: La data in formato ISO da verificare
+        months_limit: Il numero di mesi limite. Se None, non c'è limite
+    
+    Returns:
+        bool: True se la data è nell'intervallo, False altrimenti
+    """
+    if months_limit is None:
+        return True  # Nessun limite impostato
+    
+    try:
+        # Convertiamo la data da verificare
+        date = datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%SZ")
+        
+        # Data di oggi e limite
+        today = datetime.now()
+        limit_date = today + timedelta(days=30 * months_limit)
+        
+        # Verifichiamo che la data sia successiva a oggi e entro il limite
+        return today <= date <= limit_date
+    except Exception as e:
+        logger.warning(f"Errore nel verificare l'intervallo di date: {str(e)}")
+        return True  # In caso di errore, non filtriamo la data
+
+def load_input_data():
+    """Load prescription data from input file."""
+    try:
+        if os.path.exists(INPUT_FILE):
+            with open(INPUT_FILE, 'r') as f:
+                return json.load(f)
+        # Se il file non esiste, lo creiamo con un array vuoto
+        with open(INPUT_FILE, 'w') as f:
+            json.dump([], f)
+        logger.info("Creato nuovo file di prescrizioni")
+        return []
+    except Exception as e:
+        logger.error(f"Errore nel caricare i dati di input: {str(e)}")
+        return []
+
+def save_input_data(data):
+    """Salva i dati delle prescrizioni su file con diagnostica migliorata."""
+    try:
+        file_path = os.path.abspath(INPUT_FILE)
+        logger.info(f"Tentativo di salvare i dati delle prescrizioni in: {file_path}")
+        
+        # Verifica se la directory esiste
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        
+        # Salva con indentazione per leggibilità
+        with open(file_path, 'w') as f:
+            json.dump(data, f, indent=2)
+        
+        # Verifica che il file esista dopo il salvataggio
+        if os.path.exists(file_path):
+            file_size = os.path.getsize(file_path)
+            logger.info(f"Dati delle prescrizioni salvati con successo ({file_size} bytes)")
+            
+            # Leggi il file per verificare il contenuto
+            with open(file_path, 'r') as f:
+                content = json.load(f)
+                logger.info(f"Verificato il contenuto: {len(content)} prescrizioni")
+        else:
+            logger.error(f"Il file {file_path} non esiste dopo il salvataggio")
+    except Exception as e:
+        logger.error(f"Errore nel salvare i dati delle prescrizioni: {str(e)}")
+        
+        # Tentativo di recupero
+        try:
+            # Prova a salvare in una posizione alternativa
+            alt_path = os.path.join(os.path.expanduser("~"), "recup_prescriptions.json")
+            logger.info(f"Tentativo di salvare in posizione alternativa: {alt_path}")
+            
+            with open(alt_path, 'w') as f:
+                json.dump(data, f, indent=2)
+                
+            logger.info(f"Dati salvati nella posizione alternativa: {alt_path}")
+            logger.info(f"Modifica la variabile INPUT_FILE nel codice: {alt_path}")
+        except Exception as alt_e:
+            logger.error(f"Anche il salvataggio alternativo è fallito: {str(alt_e)}")
+
+def load_previous_data():
+    """Load previous availability data."""
+    try:
+        if os.path.exists(PREVIOUS_DATA_FILE):
+            with open(PREVIOUS_DATA_FILE, 'r') as f:
+                return json.load(f)
+        # Se il file non esiste, lo creiamo con un dizionario vuoto
+        with open(PREVIOUS_DATA_FILE, 'w') as f:
+            json.dump({}, f)
+        logger.info("Creato nuovo file di dati precedenti")
+        return {}
+    except Exception as e:
+        logger.error(f"Errore nel caricare i dati precedenti: {str(e)}")
+        return {}
+
+def save_previous_data(data):
+    """Save current availability data for future comparison."""
+    try:
+        with open(PREVIOUS_DATA_FILE, 'w') as f:
+            json.dump(data, f, indent=2)
+        logger.info("Dati precedenti salvati con successo")
+    except Exception as e:
+        logger.error(f"Errore nel salvare i dati precedenti: {str(e)}")
+
+def is_similar_datetime(date1_str, date2_str, minutes_threshold=30):
+    """Controlla se due date sono simili entro un certo numero di minuti."""
+    try:
+        dt1 = datetime.strptime(date1_str, "%Y-%m-%dT%H:%M:%SZ")
+        dt2 = datetime.strptime(date2_str, "%Y-%m-%dT%H:%M:%SZ")
+        
+        # Calcoliamo la differenza in minuti
+        diff_minutes = abs((dt2 - dt1).total_seconds() / 60)
+        
+        # Stessa data (giorno, mese, anno)?
+        same_day = (dt1.year == dt2.year and dt1.month == dt2.month and dt1.day == dt2.day)
+        
+        # Se è lo stesso giorno e la differenza è entro la soglia
+        return same_day and diff_minutes <= minutes_threshold
+    except Exception:
+        return False 
+---- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\modules\locations_db.py ---- 
+import json
+import os
+import logging
+import requests
+import time
+
+# Imposta il percorso del file JSON che fungerà da "database" delle location
+LOCATIONS_DB_FILE = "locations_db.json"
+
+logger = logging.getLogger("LocationsDB")
+
+def geocode_query(query):
+    """
+    Effettua il geocoding di una query (indirizzo, nome, ecc.) usando Nominatim.
+    Restituisce latitudine e longitudine oppure (None, None) in caso di fallimento.
+    """
+    base_url = "https://nominatim.openstreetmap.org/search"
+    params = {
+        "q": query,
+        "format": "json",
+        "limit": 1
+    }
+    headers = {
+        "User-Agent": "RecupMonitor/1.0 (tuo.email@dominio.com)"
+    }
+    
+    try:
+        response = requests.get(base_url, params=params, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        if data:
+            lat = float(data[0]["lat"])
+            lon = float(data[0]["lon"])
+            return lat, lon
+    except Exception as e:
+        print(f"Errore nel geocoding per la query '{query}': {e}")
+    return None, None
+
+def load_locations_db():
+    """Carica il database delle location da file JSON."""
+    if os.path.exists(LOCATIONS_DB_FILE):
+        try:
+            with open(LOCATIONS_DB_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            logger.warning("File JSON delle location corrotto, restituisco dizionario vuoto")
+            return {}
+    return {}
+
+def save_locations_db(locations):
+    """Salva il database delle location su file JSON."""
+    try:
+        with open(LOCATIONS_DB_FILE, "w", encoding="utf-8") as f:
+            json.dump(locations, f, indent=4, ensure_ascii=False)
+        logger.info("Database delle location salvato con successo")
+    except Exception as e:
+        logger.error(f"Errore nel salvataggio del database delle location: {e}")
+
+def update_location_db(hospital_name, address, location_db):
+    """
+    Aggiorna il dizionario delle location.
+    Se latitudine o longitudine sono None, prova a geocodificare usando prima l'indirizzo;
+    se questo fallisce, prova con il nome dell'ospedale.
+    """
+    key = f"{hospital_name} - {address}"
+    if key not in location_db:
+        # Aggiunge la voce con coordinate vuote
+        location_db[key] = {
+            "hospital": hospital_name,
+            "address": address,
+            "latitude": None,
+            "longitude": None
+        }
+    
+    # Se le coordinate sono già presenti, non fare nulla
+    if location_db[key]["latitude"] is not None and location_db[key]["longitude"] is not None:
+        return
+
+    # Prima prova a geocodificare l'indirizzo
+    lat, lon = geocode_query(address)
+    
+    # Se non trova, prova a usare il nome dell'ospedale (magari con aggiunta di "Italia" per contestualizzare)
+    if lat is None or lon is None:
+        query = f"{hospital_name}, Italia"
+        lat, lon = geocode_query(query)
+    
+    # Se sono state trovate coordinate, aggiornale
+    if lat is not None and lon is not None:
+        location_db[key]["latitude"] = lat
+        location_db[key]["longitude"] = lon
+        print(f"Coordinate trovate per {key}: {lat}, {lon}")
+    else:
+        print(f"Coordinate non trovate per {key}")
+
+    # Per rispettare i limiti di Nominatim, attende 1 secondo tra le richieste
+    time.sleep(.3)
+ 
+---- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\modules\monitoring.py ---- 
+import asyncio
+import time
+import logging
+from datetime import datetime
+
+# Importiamo le variabili globali dal modulo principale
+from recup_monitor import logger
+
+# Importiamo le funzioni da altri moduli
+from modules.data_utils import load_input_data, load_previous_data, save_previous_data
+from modules.prescription_processor import process_prescription
+
+async def run_monitoring_loop():
+    """Funzione dedicata al loop di monitoraggio da eseguire in un processo separato."""
+    # Load previous data
+    previous_data = load_previous_data()
+    
+    while True:
+        try:
+            start_time = time.time()
+            logger.info(f"Inizio ciclo di monitoraggio: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            
+            # Load input data
+            prescriptions = load_input_data()
+            
+            # Process each prescription
+            for prescription in prescriptions:
+                process_prescription(prescription, previous_data)
+                # Small delay between processing different prescriptions
+                await asyncio.sleep(1)
+            
+            # Save updated previous data
+            save_previous_data(previous_data)
+            
+            # Calculate time to sleep to maintain 5-minute cycles
+            elapsed = time.time() - start_time
+            sleep_time = max(300 - elapsed, 1)  # 300 seconds = 5 minutes
+            
+            logger.info(f"Ciclo completato in {elapsed:.2f} secondi. In attesa del prossimo ciclo tra {sleep_time:.2f} secondi.")
+            await asyncio.sleep(sleep_time)
+            
+        except Exception as e:
+            logger.error(f"Errore nel servizio di monitoraggio: {str(e)}")
+            # In caso di errore, aspetta 1 minuto e riprova
+            await asyncio.sleep(60)
+
+async def start_monitoring():
+    """Avvia il thread di monitoraggio delle prescrizioni."""
+    # Load previous data
+    previous_data = load_previous_data()
+    
+    while True:
+        try:
+            start_time = time.time()
+            logger.info(f"Inizio ciclo di monitoraggio: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            
+            # Load input data
+            prescriptions = load_input_data()
+            
+            # Process each prescription
+            for prescription in prescriptions:
+                process_prescription(prescription, previous_data)
+                # Small delay between processing different prescriptions
+                await asyncio.sleep(1)
+            
+            # Save updated previous data
+            save_previous_data(previous_data)
+            
+            # Calculate time to sleep to maintain 5-minute cycles
+            elapsed = time.time() - start_time
+            sleep_time = max(300 - elapsed, 1)  # 300 seconds = 5 minutes
+            
+            logger.info(f"Ciclo completato in {elapsed:.2f} secondi. In attesa del prossimo ciclo tra {sleep_time:.2f} secondi.")
+            await asyncio.sleep(sleep_time)
+            
+        except Exception as e:
+            logger.error(f"Errore nel servizio di monitoraggio: {str(e)}")
+            # In caso di errore, aspetta 1 minuto e riprova
+            await asyncio.sleep(60) 
+---- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\modules\prescription_processor.py ---- 
+import asyncio, logging, json, os
+
+# Importiamo le variabili globali e funzioni da altri moduli
+from recup_monitor import logger, TELEGRAM_TOKEN  # Importa il token Telegram
+
+from modules.api_client import (
+    get_access_token, update_device_token, get_patient_info, 
+    get_doctor_info, check_prescription, get_prescription_details,
+    get_availabilities
+)
+from modules.data_utils import (
+    load_input_data, save_input_data, is_date_within_range,
+    is_similar_datetime, format_date
+)
+
+from modules.locations_db import update_location_db
+
+
+def compare_availabilities(previous, current, fiscal_code, nre, prescription_name="", cf_code="", config=None):
+    """Compare previous and current availabilities with configuration per prescrizione."""
+    # Configurazione predefinita se non specificata
+    default_config = {
+        "only_new_dates": True,
+        "notify_removed": False,
+        "min_changes_to_notify": 2,
+        "time_threshold_minutes": 60,
+        "show_all_current": True,  # Mostra tutte le disponibilità attuali
+        "months_limit": None       # Nessun limite di mesi predefinito
+    }
+    
+    # Usa la configurazione fornita o quella predefinita
+    if config is None:
+        config = default_config
+    else:
+        # Merge delle configurazioni, mantenendo i valori forniti
+        for key, value in default_config.items():
+            if key not in config:
+                config[key] = value
+    
+    # Se è la prima volta che controlliamo questa prescrizione
+    if not previous or not current:
+        # Se non c'erano dati precedenti, consideriamo tutto come nuovo ma non spammiamo
+        if not previous and len(current) > 0:
+            # Filtriamo le disponibilità in base al limite di mesi
+            months_limit = config.get("months_limit")
+            if months_limit is not None:
+                filtered_current = [
+                    avail for avail in current 
+                    if is_date_within_range(avail['date'], months_limit)
+                ]
+            else:
+                filtered_current = current
+            
+            # Se non ci sono disponibilità nel range, non mostriamo nulla
+            if not filtered_current:
+                return None
+                
+            # Preparazione del messaggio con formattazione HTML migliorata
+            message = f"""
+<b>🔍 Nuova Prescrizione</b>
+
+<b>Codice Fiscale:</b> <code>{fiscal_code}</code>
+<b>ID Tessera Sanitaria:</b> <code>{cf_code}</code>
+<b>NRE:</b> <code>{nre}</code>
+<b>Descrizione:</b> <code>{prescription_name}</code>
+"""
+            
+            # Se c'è un limite di mesi, lo mostriamo
+            if months_limit is not None:
+                message += f"<b>Filtro:</b> Solo appuntamenti entro {months_limit} mesi\n"
+            
+            message += f"\n📋 <b>Disponibilità Trovate:</b> {len(filtered_current)}\n"
+            
+            # Raggruppiamo per ospedale
+            hospitals = {}
+            for avail in sorted(filtered_current, key=lambda x: x['date']):
+                hospital_name = avail['hospital']['name']
+                if hospital_name not in hospitals:
+                    hospitals[hospital_name] = []
+                hospitals[hospital_name].append(avail)
+            
+            # Mostriamo per ospedale
+            for hospital_name, availabilities in hospitals.items():
+                message += f"\n<b>{hospital_name}</b>\n"
+                message += f"📍 {availabilities[0]['site']['address']}\n"
+                
+                for avail in sorted(availabilities, key=lambda x: x['date']):
+                    message += f"📅 {format_date(avail['date'])} - {avail['price']} €\n"
+                
+                message += "\n"  # Spazio tra gli ospedali
+            
+            return message
+        return None
+
+    # Otteniamo i valori di configurazione
+    only_new_dates = config.get("only_new_dates", True)
+    notify_removed = config.get("notify_removed", False)
+    min_changes = config.get("min_changes_to_notify", 2)
+    time_threshold = config.get("time_threshold_minutes", 60)
+    show_all_current = config.get("show_all_current", True)
+    months_limit = config.get("months_limit", None)
+    
+    # Filtriamo le disponibilità attuali in base al limite di mesi
+    if months_limit is not None:
+        filtered_current = [
+            avail for avail in current 
+            if is_date_within_range(avail['date'], months_limit)
+        ]
+    else:
+        filtered_current = current
+        
+    # Filtriamo anche le disponibilità precedenti per avere un confronto corretto
+    if months_limit is not None:
+        filtered_previous = [
+            avail for avail in previous 
+            if is_date_within_range(avail['date'], months_limit)
+        ]
+    else:
+        filtered_previous = previous
+    
+    # Prepara una struttura per i cambiamenti
+    changes = {
+        "new": [],
+        "removed": [],
+        "changed": []
+    }
+    
+    # Crea dizionari per un confronto più semplice
+    # Usiamo l'ID dell'ospedale come chiave principale per aggregare meglio
+    prev_by_hospital = {}
+    curr_by_hospital = {}
+    
+    # Organizziamo i dati per ospedale
+    for a in filtered_previous:
+        hospital_id = a['hospital'].get('id', 'unknown')
+        if hospital_id not in prev_by_hospital:
+            prev_by_hospital[hospital_id] = []
+        prev_by_hospital[hospital_id].append(a)
+    
+    for a in filtered_current:
+        hospital_id = a['hospital'].get('id', 'unknown')
+        if hospital_id not in curr_by_hospital:
+            curr_by_hospital[hospital_id] = []
+        curr_by_hospital[hospital_id].append(a)
+    
+    # Lista degli ospedali
+    all_hospitals = set(list(prev_by_hospital.keys()) + list(curr_by_hospital.keys()))
+    
+    # Esaminiamo i cambiamenti per ospedale
+    for hospital_id in all_hospitals:
+        prev_avails = prev_by_hospital.get(hospital_id, [])
+        curr_avails = curr_by_hospital.get(hospital_id, [])
+        
+        # Costruiamo dizionari per date
+        prev_dates = {a['date']: a for a in prev_avails}
+        curr_dates = {a['date']: a for a in curr_avails}
+        
+        # Verifica nuove date
+        for date, avail in curr_dates.items():
+            if date not in prev_dates:
+                # Verifichiamo se si tratta solo di un piccolo cambiamento di orario
+                is_minor_change = False
+                for prev_date in prev_dates.keys():
+                    # Confrontiamo le date ignorando ore e minuti
+                    if is_similar_datetime(prev_date, date, time_threshold):
+                        # È probabilmente solo un aggiustamento di orario, non una nuova disponibilità
+                        is_minor_change = True
+                        break
+                
+                if not is_minor_change:
+                    changes["new"].append(avail)
+        
+        # Verifica date rimosse (solo se notify_removed è True)
+        if notify_removed:
+            for date, avail in prev_dates.items():
+                if date not in curr_dates:
+                    # Verifichiamo se si tratta solo di un piccolo cambiamento di orario
+                    is_minor_change = False
+                    for curr_date in curr_dates.keys():
+                        # Confrontiamo le date ignorando ore e minuti
+                        if is_similar_datetime(date, curr_date, time_threshold):
+                            # È probabilmente solo un aggiustamento di orario, non una rimozione
+                            is_minor_change = True
+                            break
+                    
+                    if not is_minor_change:
+                        changes["removed"].append(avail)
+        
+        # Verifica cambiamenti di prezzo (solo se only_new_dates è False)
+        if not only_new_dates:
+            for date, curr_avail in curr_dates.items():
+                if date in prev_dates:
+                    prev_avail = prev_dates[date]
+                    if prev_avail['price'] != curr_avail['price']:
+                        changes["changed"].append({
+                            "previous": prev_avail,
+                            "current": curr_avail
+                        })
+    
+    # Calcoliamo il totale dei cambiamenti in base alla configurazione
+    total_changes = len(changes["new"])
+    if notify_removed:
+        total_changes += len(changes["removed"])
+    if not only_new_dates:
+        total_changes += len(changes["changed"])
+    
+    # Se ci sono abbastanza cambiamenti, costruisci un messaggio
+    if total_changes >= min_changes or (len(changes["new"]) > 0 and only_new_dates):
+        # Preparazione del messaggio con formattazione HTML migliorata
+        message = f"""
+<b>🔍 Aggiornamento Prescrizione</b>
+
+<b>Codice Fiscale:</b> <code>{fiscal_code}</code>
+<b>ID Tessera Sanitaria:</b> <code>{cf_code}</code>
+<b>NRE:</b> <code>{nre}</code>
+<b>Descrizione:</b> <code>{prescription_name}</code>
+"""
+        
+        # Se c'è un limite di mesi, lo mostriamo
+        if months_limit is not None:
+            message += f"<b>Filtro:</b> Solo appuntamenti entro {months_limit} mesi\n"
+        
+        # Intestazione del messaggio
+        if only_new_dates:
+            message += f"🆕 <b>Nuove Disponibilità:</b> {len(changes['new'])}\n"
+        else:
+            message += f"🔄 <b>Cambiamenti:</b> {total_changes}\n"
+        
+        # Nuove disponibilità
+        if changes["new"]:
+            message += "\n<b>🟢 Nuove Disponibilità:</b>\n"
+            
+            # Raggruppiamo per ospedale
+            hospitals_new = {}
+            for avail in changes["new"]:
+                hospital_name = avail['hospital']['name']
+                if hospital_name not in hospitals_new:
+                    hospitals_new[hospital_name] = []
+                hospitals_new[hospital_name].append(avail)
+            
+            # Mostriamo per ospedale
+            for hospital_name, availabilities in hospitals_new.items():
+                message += f"\n<b>{hospital_name}</b>\n"
+                message += f"📍 {availabilities[0]['site']['address']}\n"
+                
+                # Ordiniamo le date
+                sorted_availabilities = sorted(availabilities, key=lambda x: x['date'])
+                
+                # Mostriamo tutte le date
+                for avail in sorted_availabilities:
+                    message += f"📅 {format_date(avail['date'])} - {avail['price']} €\n"
+        
+        # Disponibilità rimosse (se configurato)
+        if notify_removed and changes["removed"]:
+            message += "\n<b>🔴 Disponibilità Rimosse:</b>\n"
+            hospitals_removed = {}
+            for avail in changes["removed"]:
+                hospital_name = avail['hospital']['name']
+                if hospital_name not in hospitals_removed:
+                    hospitals_removed[hospital_name] = []
+                hospitals_removed[hospital_name].append(avail)
+            
+            for hospital_name, availabilities in hospitals_removed.items():
+                message += f"\n<b>{hospital_name}</b>\n"
+                message += f"📍 {availabilities[0]['site']['address']}\n"
+                
+                sorted_availabilities = sorted(availabilities, key=lambda x: x['date'])
+                
+                for avail in sorted_availabilities:
+                    message += f"📅 {format_date(avail['date'])}\n"
+        
+        # Tutte le disponibilità attuali
+        if show_all_current and filtered_current:
+            message += f"\n📋 <b>Tutte le Disponibilità:</b> {len(filtered_current)}\n"
+            
+            hospitals = {}
+            for avail in filtered_current:
+                hospital_name = avail['hospital']['name']
+                if hospital_name not in hospitals:
+                    hospitals[hospital_name] = []
+                hospitals[hospital_name].append(avail)
+            
+            for hospital_name, availabilities in hospitals.items():
+                message += f"\n<b>{hospital_name}</b>\n"
+                message += f"📍 {availabilities[0]['site']['address']}\n"
+                
+                sorted_availabilities = sorted(availabilities, key=lambda x: x['date'])
+                
+                for avail in sorted_availabilities:
+                    message += f"📅 {format_date(avail['date'])} - {avail['price']} €\n"
+        
+        return message
+    
+    return None
+
+def process_prescription(prescription, previous_data, chat_id=None):
+    """Process a single prescription and check for availability changes."""
+    fiscal_code = prescription["fiscal_code"]
+    nre = prescription["nre"]
+    prescription_key = f"{fiscal_code}_{nre}"
+    
+    # Otteniamo la configurazione specifica per questa prescrizione
+    config = prescription.get("config", {})
+    
+    # Otteniamo l'ID chat Telegram specifico per questa prescrizione, se presente
+    telegram_chat_id = prescription.get("telegram_chat_id", chat_id)
+    
+    logger.info(f"Elaborazione prescrizione {prescription_key}")
+    
+    # Step 1: Get access token
+    access_token = get_access_token()
+    if not access_token:
+        return False, "Impossibile ottenere il token di accesso"
+    
+    # Step 2: Update device token
+    update_device_token(access_token)
+    
+    # Step 3: Get patient information
+    patient_info = get_patient_info(fiscal_code)
+    if not patient_info or 'content' not in patient_info or not patient_info['content']:
+        error_msg = f"Impossibile trovare informazioni per il paziente {fiscal_code}"
+        logger.error(error_msg)
+        return False, error_msg
+        
+    # Carichiamo tutte le prescrizioni
+    all_prescriptions = load_input_data()
+    cf_code = ""
+    
+    try:
+        # Flag per verificare se abbiamo trovato e aggiornato la prescrizione
+        prescription_updated = False
+        
+        # Cerchiamo e aggiorniamo la prescrizione specifica
+        for p in all_prescriptions:
+            if (p["fiscal_code"] == fiscal_code and 
+                p["nre"] == nre):
+                
+                # Verifichiamo che ci siano informazioni del paziente valide
+                if patient_info and 'content' in patient_info and patient_info['content']:
+                    patient_details = patient_info['content'][0]
+                    
+                    # Creiamo un dizionario dettagliato e pulito
+                    patient_info_dict = {
+                        "firstName": patient_details.get("firstName", "N/A"),
+                        "lastName": patient_details.get("lastName", "N/A"),
+                        "birthDate": patient_details.get("birthDate", "N/A"),
+                        
+                        # Codice della tessera sanitaria con gestione più robusta
+                        "teamCard": {
+                            "code": patient_details.get("teamCard", {}).get("code", "N/A"),
+                            "validFrom": patient_details.get("teamCard", {}).get("startDate", "N/A"),
+                            "validTo": patient_details.get("teamCard", {}).get("endDate", "N/A")
+                        },
+                        
+                        # Residenza con gestione degli attributi mancanti
+                        "residence": " ".join(filter(bool, [
+                            patient_details.get('residence', {}).get('address', ''),
+                            patient_details.get('residence', {}).get('streetNumber', ''),
+                            patient_details.get('residence', {}).get('postalCode', ''),
+                            patient_details.get('residence', {}).get('town', {}).get('name', ''),
+                            patient_details.get('residence', {}).get('province', {}).get('id', '')
+                        ])).strip() or "N/A",
+                        
+                        # Domicilio con gestione degli attributi mancanti
+                        "domicile": " ".join(filter(bool, [
+                            patient_details.get('domicile', {}).get('address', ''),
+                            patient_details.get('domicile', {}).get('streetNumber', ''),
+                            patient_details.get('domicile', {}).get('postalCode', ''),
+                            patient_details.get('domicile', {}).get('town', {}).get('name', ''),
+                            patient_details.get('domicile', {}).get('province', {}).get('id', '')
+                        ])).strip() or "N/A",
+                        
+                        # Informazioni aggiuntive
+                        "birthPlace": f"{patient_details.get('birthPlace', {}).get('name', 'N/A')}, "
+                                      f"{patient_details.get('birthProvince', {}).get('id', 'N/A')}",
+                        
+                        "citizenship": patient_details.get('citizenship', {}).get('name', 'N/A')
+                    }
+                    
+                    cf_code = patient_details.get("teamCard", {}).get("code", "")
+                    
+                    # Aggiungiamo le informazioni del paziente
+                    p["patient_info"] = patient_info_dict
+                    
+                    # Logghiamo l'aggiornamento
+                    logger.info(f"Aggiornate informazioni paziente per prescrizione NRE: {nre}")
+                    
+                    # Impostiamo il flag di aggiornamento
+                    prescription_updated = True
+                
+                break  # Usciamo dal ciclo dopo aver trovato la prescrizione
+        
+        # Salviamo solo se abbiamo effettivamente aggiornato qualcosa
+        if prescription_updated:
+            save_input_data(all_prescriptions)
+            logger.info(f"Salvate informazioni paziente per prescrizione NRE: {nre}")
+        else:
+            logger.warning(f"Nessuna prescrizione trovata per aggiornamento: {fiscal_code}, {nre}")
+    
+    except Exception as e:
+        # Catturiamo e logghiamo eventuali errori durante l'aggiornamento
+        logger.error(f"Errore durante l'aggiornamento delle informazioni paziente: {str(e)}")
+    
+    
+    patient_id = patient_info['content'][0]['id']
+    
+    # Step 4: Get doctor information
+    doctor_info = get_doctor_info(fiscal_code)
+    if not doctor_info or 'id' not in doctor_info:
+        error_msg = f"Impossibile trovare informazioni per il medico del paziente {fiscal_code}"
+        logger.error(error_msg)
+        return False, error_msg
+    
+    process_id = doctor_info['id']
+    
+    # Step 5: Check prescription
+    check_prescription_result = check_prescription(patient_id, nre)
+    if not check_prescription_result:
+        error_msg = f"Impossibile verificare la prescrizione {nre}"
+        logger.error(error_msg)
+        return False, error_msg
+    
+    # Step 6: Get prescription details
+    prescription_details = get_prescription_details(patient_id, nre)
+    if not prescription_details or 'details' not in prescription_details or not prescription_details['details']:
+        error_msg = f"Impossibile ottenere i dettagli della prescrizione {nre}"
+        logger.error(error_msg)
+        return False, error_msg
+    
+    order_ids = prescription_details['details'][0]['service']['id']
+    
+    # Ottieni il nome della prescrizione
+    prescription_name = "Prescrizione sconosciuta"
+    try:
+        if 'details' in prescription_details and prescription_details['details']:
+            service_description = prescription_details['details'][0]['service'].get('description', '')
+            if service_description:
+                prescription_name = service_description
+    except Exception as e:
+        logger.warning(f"Impossibile ottenere il nome della prescrizione: {str(e)}")
+    
+    # Aggiorniamo il nome della prescrizione nei dati
+    prescription["description"] = prescription_name
+    
+    # Step 7: Get availabilities
+    availabilities = get_availabilities(patient_id, process_id, nre, order_ids)
+    if not availabilities or 'content' not in availabilities:
+        error_msg = f"Impossibile ottenere le disponibilità per {nre}, sei sicuro che non sia già prenotata?"
+        logger.error(error_msg)
+        return False, error_msg
+    
+    current_availabilities = availabilities['content']
+    
+    # *** In questo punto aggiorniamo il database delle location ***
+    if os.path.exists("locations.json"):
+        with open("locations.json", "r") as f:
+            locations_db = json.load(f)
+    else:
+        locations_db = {}
+        
+    for slot in current_availabilities:
+        hospital_info = slot.get("hospital", {})
+        site_info = slot.get("site", {})
+        hospital_name = hospital_info.get("name", "Sconosciuto")
+        address = site_info.get("address", "Indirizzo non disponibile")
+        update_location_db(hospital_name, address, locations_db)
+    
+    # Salva le modifiche sul file JSON
+    with open("locations.json", "w") as f:
+        json.dump(locations_db, f, indent=2)
+    
+    # Compare with previous data to detect changes
+    previous_availabilities = previous_data.get(prescription_key, [])
+    
+    # Confronta e genera un messaggio se ci sono cambiamenti significativi
+    changes_message = compare_availabilities(
+        previous_availabilities, 
+        current_availabilities,
+        fiscal_code,
+        nre,
+        prescription_name,
+        cf_code,
+        config
+    )
+    
+    # Se ci sono cambiamenti, invia una notifica
+    if changes_message:
+        logger.info(f"Rilevati cambiamenti significativi per {prescription_key}")
+        
+        # Controlliamo se le notifiche sono abilitate per questa prescrizione
+        notifications_enabled = prescription.get("notifications_enabled", True)  # Default a True
+        
+        if notifications_enabled:
+            try:
+                # Utilizziamo il metodo normale invece di quello asincrono per evitare problemi
+                import requests
+                
+                url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+                data = {
+                    "chat_id": telegram_chat_id,
+                    "text": changes_message,
+                    "parse_mode": "HTML"
+                }
+                
+                response = requests.post(url, data=data, timeout=10)
+                response.raise_for_status()
+                
+                logger.info(f"Notifica inviata al chat ID: {telegram_chat_id}")
+            except Exception as e:
+                logger.error(f"Errore nell'inviare notifica: {str(e)}")
+        else:
+            logger.info(f"Notifiche disabilitate per {prescription_key}, nessun messaggio inviato")
+    else:
+        logger.info(f"Nessun cambiamento significativo rilevato per {prescription_key}")
+    
+    # Update previous data for next comparison
+    previous_data[prescription_key] = current_availabilities
+    
+    auto_book_enabled = prescription.get("auto_book_enabled", False)
+    
+    # Se ci sono disponibilità e la prenotazione automatica è abilitata
+    if auto_book_enabled and current_availabilities:
+        # Verifichiamo se la prescrizione ha i dati di contatto necessari
+        if "phone" in prescription and "email" in prescription:
+            try:
+                # Verifichiamo che la prescrizione non sia già prenotata
+                if not any(booking.get("booking_id") for booking in prescription.get("bookings", [])):
+                    logger.info(f"Tentativo di prenotazione automatica per {prescription_key}")
+                    
+                    # Importiamo la funzione di prenotazione
+                    from modules.booking_client import booking_workflow
+                    
+                    # Avviamo il processo di prenotazione automatica
+                    result = booking_workflow(
+                        fiscal_code=fiscal_code,
+                        nre=nre,
+                        phone_number=prescription["phone"],
+                        email=prescription["email"],
+                        patient_id=patient_id,
+                        process_id=process_id,
+                        slot_choice=0  # Il primo slot disponibile
+                    )
+                    
+                    if result["success"] and result["action"] == "booked":
+                        # La prenotazione è andata a buon fine!
+                        logger.info(f"Prenotazione automatica riuscita per {prescription_key}!")
+                        
+                        # Formattare la data
+                        try:
+                            date_obj = datetime.strptime(result["appointment_date"], "%Y-%m-%dT%H:%M:%SZ")
+                            formatted_date = date_obj.strftime("%d/%m/%Y %H:%M")
+                        except:
+                            formatted_date = result["appointment_date"]
+                        
+                        # Inviamo una notifica all'utente
+                        booking_message = f"""
+<b>✅ Prenotazione Automatica Completata!</b>
+
+<b>Prescrizione:</b> {prescription_name}
+<b>Data:</b> {formatted_date}
+<b>Ospedale:</b> {result['hospital']}
+<b>Indirizzo:</b> {result['address']}
+<b>ID Prenotazione:</b> {result['booking_id']}
+
+La prenotazione è stata effettuata automaticamente. Controlla la tua email per conferma.
+"""
+                        # Utilizziamo il metodo normale invece di quello asincrono per evitare problemi
+                        import requests
+                        
+                        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+                        data = {
+                            "chat_id": telegram_chat_id,
+                            "text": booking_message,
+                            "parse_mode": "HTML"
+                        }
+                        
+                        response = requests.post(url, data=data, timeout=10)
+                        
+                        # Invio del PDF come documento
+                        url_document = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument"
+                        
+                        from io import BytesIO
+                        
+                        files = {
+                            'document': ('prenotazione.pdf', BytesIO(result['pdf_content']), 'application/pdf')
+                        }
+                        
+                        data_document = {
+                            "chat_id": telegram_chat_id,
+                            "caption": f"Documento di prenotazione per {prescription_name} del {formatted_date}"
+                        }
+                        
+                        requests.post(url_document, data=data_document, files=files, timeout=30)
+                        
+                        # Aggiorniamo la prescrizione per includere la prenotazione
+                        all_prescriptions = load_input_data()
+                        for p in all_prescriptions:
+                            if p["fiscal_code"] == fiscal_code and p["nre"] == nre:
+                                if "bookings" not in p:
+                                    p["bookings"] = []
+                                p["bookings"].append({
+                                    "booking_id": result["booking_id"],
+                                    "date": result["appointment_date"],
+                                    "hospital": result["hospital"],
+                                    "address": result["address"],
+                                    "service": prescription_name
+                                })
+                                
+                                # Disabilitiamo la prenotazione automatica dopo il successo
+                                p["auto_book_enabled"] = False
+                                
+                                break
+                        
+                        # Salviamo le modifiche
+                        save_input_data(all_prescriptions)
+                    elif result["success"] and result["action"] == "list_slots":
+                        # Ci sono slot disponibili, ma non è stata completata la prenotazione
+                        logger.info(f"Slot disponibili per {prescription_key}, prenotazione non completata")
+                    else:
+                        # Errore nella prenotazione
+                        logger.error(f"Errore nella prenotazione automatica per {prescription_key}: {result.get('message', 'Errore sconosciuto')}")
+            except Exception as e:
+                logger.error(f"Errore durante la prenotazione automatica: {str(e)}")
+    
+    # Update previous data for next comparison
+    previous_data[prescription_key] = current_availabilities
+    
+    return True, prescription_name
+    
+    
+    
+    
+     
+---- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\modules\__init__.py ---- 
+ 
