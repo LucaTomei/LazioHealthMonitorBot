@@ -1,16 +1,17 @@
----- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\authorized_users.json ---- 
+---- File: C:\Users\luca.tomei\Downloads\aaaaa\LazioHealthMonitorBot - Copy\authorized_users.json ---- 
 [
 ] 
----- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\input_prescriptions.json ---- 
+---- File: C:\Users\luca.tomei\Downloads\aaaaa\LazioHealthMonitorBot - Copy\input_prescriptions.json ---- 
 [] 
----- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\locations.json ---- 
+---- File: C:\Users\luca.tomei\Downloads\aaaaa\LazioHealthMonitorBot - Copy\locations.json ---- 
 {} 
----- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\previous_data.json ---- 
+---- File: C:\Users\luca.tomei\Downloads\aaaaa\LazioHealthMonitorBot - Copy\previous_data.json ---- 
 {} 
----- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\config.py ---- 
+---- File: C:\Users\luca.tomei\Downloads\aaaaa\LazioHealthMonitorBot - Copy\config.py ---- 
 import os
 import logging
 from logging.handlers import RotatingFileHandler
+from telegram import ReplyKeyboardMarkup
 
 # Configurazione del logging
 logging.basicConfig(
@@ -52,8 +53,19 @@ USERS_FILE = "authorized_users.json"
 authorized_users = []
 
 # Dizionario per tenere traccia delle conversazioni in corso
-user_data = {} 
----- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\recup_monitor.py ---- 
+user_data = {}
+
+# Definizione della tastiera principale come variabile globale
+MAIN_KEYBOARD = ReplyKeyboardMarkup([
+    ["➕ Aggiungi Prescrizione", "➖ Rimuovi Prescrizione"],
+    ["📋 Lista Prescrizioni", "🔄 Verifica Disponibilità"],
+    ["🔔 Gestisci Notifiche", "⏱ Imposta Filtro Date"],
+    ["🏥 Prenota", "🤖 Prenota Automaticamente"],
+    ["🚫 Blacklist Ospedali", "📝 Le mie Prenotazioni"],
+    ["ℹ️ Informazioni", "🔑 Autorizza Utente"]
+], resize_keyboard=True)
+ 
+---- File: C:\Users\luca.tomei\Downloads\aaaaa\LazioHealthMonitorBot - Copy\recup_monitor.py ---- 
 import multiprocessing
 import logging
 import os
@@ -259,7 +271,7 @@ def main():
 
 if __name__ == "__main__":
     main() 
----- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\modules\api_client.py ---- 
+---- File: C:\Users\luca.tomei\Downloads\aaaaa\LazioHealthMonitorBot - Copy\modules\api_client.py ---- 
 import requests
 import logging
 
@@ -647,7 +659,7 @@ def get_availabilities(patient_id, process_id, nre, order_ids):
     except Exception as e:
         logger.error(f"Errore nell'ottenere le disponibilità per {nre}: {str(e)}")
         return None 
----- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\modules\booking_client.py ---- 
+---- File: C:\Users\luca.tomei\Downloads\aaaaa\LazioHealthMonitorBot - Copy\modules\booking_client.py ---- 
 import requests
 import base64
 import json
@@ -1072,8 +1084,8 @@ def get_user_bookings(fiscal_code):
             "success": False,
             "message": f"Errore nel recupero delle prenotazioni: {str(e)}"
         } 
----- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\modules\bot_handlers.py ---- 
-import re
+---- File: C:\Users\luca.tomei\Downloads\aaaaa\LazioHealthMonitorBot - Copy\modules\bot_handlers.py ---- 
+import re, os, json
 import asyncio
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
@@ -1091,12 +1103,13 @@ from io import BytesIO
 
 # Importiamo le variabili globali dal modulo principale
 from config import (
-    logger, user_data, authorized_users,
+    logger, user_data, authorized_users, MAIN_KEYBOARD,
     WAITING_FOR_FISCAL_CODE, WAITING_FOR_NRE, CONFIRM_ADD,
     WAITING_FOR_PRESCRIPTION_TO_DELETE, WAITING_FOR_PRESCRIPTION_TO_TOGGLE,
     WAITING_FOR_DATE_FILTER, WAITING_FOR_MONTHS_LIMIT, CONFIRM_DATE_FILTER,
     WAITING_FOR_BOOKING_CHOICE, WAITING_FOR_BOOKING_CONFIRMATION, WAITING_FOR_PHONE,
-    WAITING_FOR_EMAIL, WAITING_FOR_SLOT_CHOICE, WAITING_FOR_BOOKING_TO_CANCEL, WAITING_FOR_AUTO_BOOK_CHOICE, AUTHORIZING
+    WAITING_FOR_EMAIL, WAITING_FOR_SLOT_CHOICE, WAITING_FOR_BOOKING_TO_CANCEL, WAITING_FOR_AUTO_BOOK_CHOICE, AUTHORIZING,
+    WAITING_FOR_PRESCRIPTION_BLACKLIST, WAITING_FOR_HOSPITAL_SELECTION
 )
 
 # Importiamo le funzioni da altri moduli
@@ -1164,27 +1177,415 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.warning(f"Tentativo di accesso non autorizzato da {user_id}")
         return
     
-    # Creiamo una tastiera personalizzata con tutte le funzionalità
-    keyboard = [
-        ["➕ Aggiungi Prescrizione", "➖ Rimuovi Prescrizione"],
-        ["📋 Lista Prescrizioni", "🔄 Verifica Disponibilità"],
-        ["🔔 Gestisci Notifiche", "⏱ Imposta Filtro Date"],
-        ["🏥 Prenota", "🤖 Prenota Automaticamente"],
-        ["📝 Le mie Prenotazioni", "ℹ️ Informazioni"],
-        ["🔑 Autorizza Utente"]
-    ]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    
+
     await update.message.reply_text(
         f"👋 Benvenuto, {update.effective_user.first_name}!\n\n"
         "Questo bot ti aiuterà a monitorare le disponibilità del Servizio Sanitario Nazionale.\n\n"
         "Utilizza i pulsanti sotto per gestire le prescrizioni da monitorare.",
-        reply_markup=reply_markup
+        reply_markup=MAIN_KEYBOARD
     )
     
 # =============================================================================
 # GESTORI PRESCRIZIONI: AGGIUNTA
 # =============================================================================
+
+async def manage_hospital_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gestisce la blacklist degli ospedali per una prescrizione."""
+    user_id = update.effective_user.id
+    
+    # Controlliamo se l'utente è autorizzato
+    if str(user_id) not in authorized_users:
+        await update.message.reply_text("🔒 Non sei autorizzato ad utilizzare questa funzione.")
+        return
+    
+    # Carichiamo le prescrizioni
+    prescriptions = load_input_data()
+    
+    # Filtriamo solo le prescrizioni dell'utente o tutte se è admin
+    is_admin = user_id == int(authorized_users[0]) if authorized_users else False
+    user_prescriptions = []
+    
+    if is_admin:
+        user_prescriptions = prescriptions
+    else:
+        user_prescriptions = [p for p in prescriptions if p.get("telegram_chat_id") == user_id]
+    
+    if not user_prescriptions:
+        await update.message.reply_text("⚠️ Non hai prescrizioni da gestire.")
+        return ConversationHandler.END
+    
+    # Costruiamo il corpo del messaggio con le informazioni dettagliate
+    message = "🚫 <b>Blacklist Ospedali</b>\n\nSeleziona la prescrizione:\n\n"
+    
+    for idx, prescription in enumerate(user_prescriptions):
+        desc = prescription.get("description", "Prescrizione")
+        fiscal_code = prescription["fiscal_code"]
+        
+        # Mostriamo il numero di ospedali in blacklist
+        blacklist_count = len(prescription.get("config", {}).get("hospitals_blacklist", []))
+        blacklist_status = f"{blacklist_count} ospedali esclusi" if blacklist_count else "nessun ospedale escluso"
+        
+        message += f"{idx+1}. <b>{desc}</b>\n"
+        message += f"   CF: {fiscal_code} • {blacklist_status}\n\n"
+    
+    # Creiamo pulsanti più semplici e compatti
+    keyboard = []
+    
+    for idx, _ in enumerate(user_prescriptions):
+        keyboard.append([
+            InlineKeyboardButton(
+                f"{idx+1}",  # Solo il numero
+                callback_data=f"blacklist_{idx}"
+            )
+        ])
+    
+    keyboard.append([InlineKeyboardButton("❌ Annulla", callback_data="cancel_blacklist")])
+    
+    # Salviamo le prescrizioni nei dati dell'utente
+    user_data[user_id] = {
+        "action": "manage_hospital_blacklist",
+        "prescriptions": user_prescriptions
+    }
+    
+    await update.message.reply_text(
+        message,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML"
+    )
+    
+    return WAITING_FOR_PRESCRIPTION_BLACKLIST
+    
+async def handle_prescription_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gestisce la selezione della prescrizione per modificare la blacklist."""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    callback_data = query.data
+    
+    logger.info(f"Gestione blacklist: callback_data={callback_data}")
+    
+    if callback_data == "cancel_blacklist":
+        await query.edit_message_text("❌ Operazione annullata.")
+        # Puliamo i dati dell'utente
+        user_data.pop(user_id, None)
+        return ConversationHandler.END
+    
+    # Estraiamo l'indice della prescrizione
+    idx = int(callback_data.split("_")[1])
+    user_prescriptions = user_data[user_id]["prescriptions"]
+    
+    # Controlliamo che l'indice sia valido
+    if idx < 0 or idx >= len(user_prescriptions):
+        await query.edit_message_text("⚠️ Prescrizione non valida.")
+        user_data.pop(user_id, None)
+        return ConversationHandler.END
+    
+    # Otteniamo la prescrizione
+    prescription = user_prescriptions[idx]
+    user_data[user_id]["selected_prescription"] = prescription
+    
+    # Carichiamo il database delle location
+    location_db = {}
+    locations_file = "../locations.json"  # Vai indietro di una directory
+
+    logger.info(f"Tentativo di caricare il file locations: {locations_file}")
+    
+    try:
+        if os.path.exists(locations_file):
+            with open(locations_file, "r") as f:
+                location_db = json.load(f)
+                logger.info(f"File locations caricato con successo. Trovate {len(location_db)} location.")
+        else:
+            logger.warning(f"File locations non trovato: {locations_file}")
+            # Proviamo un percorso alternativo
+            alternative_path = "locations.json"  # Prova anche nella directory corrente
+            if os.path.exists(alternative_path):
+                with open(alternative_path, "r") as f:
+                    location_db = json.load(f)
+                    logger.info(f"File locations caricato dal percorso alternativo. Trovate {len(location_db)} location.")
+            else:
+                logger.warning(f"File locations non trovato neanche nel percorso alternativo")
+    except Exception as e:
+        logger.error(f"Errore nel caricare il database delle location: {str(e)}")
+    
+    # Estraiamo i nomi degli ospedali dal database delle location
+    # MODIFICA: Adattata alla struttura del tuo file locations.json
+    hospitals = []
+    
+    for key, location in location_db.items():
+        # In questo caso, usiamo il campo "hospital" nella struttura nidificata
+        hospital_name = location.get("hospital", "")
+        if hospital_name and hospital_name not in hospitals:
+            hospitals.append(hospital_name)
+    
+    logger.info(f"Estratti {len(hospitals)} ospedali unici dal database.")
+    
+    # Se non ci sono ospedali, mostriamo un messaggio
+    if not hospitals:
+        # Per debug, mostriamo le chiavi del primo elemento del database
+        debug_info = ""
+        if location_db:
+            first_key = next(iter(location_db))
+            first_item = location_db[first_key]
+            debug_info = f"\n\nStruttura del primo elemento:\n{first_key}: {first_item}"
+        
+        await query.edit_message_text(
+            f"⚠️ Nessun ospedale trovato nel database.{debug_info}\n\n"
+            f"Controlla la struttura del file locations.json o\n"
+            f"usa la funzione 'Verifica Disponibilità' per popolare il database."
+        )
+        user_data.pop(user_id, None)
+        return ConversationHandler.END
+    
+    # Ordiniamo gli ospedali alfabeticamente
+    hospitals.sort()
+    
+    # Otteniamo la blacklist attuale
+    current_blacklist = prescription.get("config", {}).get("hospitals_blacklist", [])
+    logger.info(f"Blacklist attuale: {current_blacklist}")
+    
+    # Implementiamo una paginazione semplice
+    hospitals_per_page = 10
+    total_pages = (len(hospitals) + hospitals_per_page - 1) // hospitals_per_page
+    
+    # Salviamo i dati temporanei
+    user_data[user_id]["hospitals"] = hospitals
+    user_data[user_id]["current_blacklist"] = current_blacklist.copy()
+    user_data[user_id]["page"] = 0
+    
+    # Mostriamo la prima pagina
+    return await show_hospitals_page(query, user_id)
+
+async def show_hospitals_page(query, user_id):
+    """Mostra una pagina di ospedali."""
+    hospitals = user_data[user_id]["hospitals"]
+    current_blacklist = user_data[user_id]["current_blacklist"]
+    page = user_data[user_id].get("page", 0)  # Default alla prima pagina
+    prescription = user_data[user_id]["selected_prescription"]
+    
+    # Numero di ospedali per pagina
+    hospitals_per_page = 10
+    total_pages = (len(hospitals) + hospitals_per_page - 1) // hospitals_per_page
+    
+    # Calcola gli indici per la pagina corrente
+    start_idx = page * hospitals_per_page
+    end_idx = min(start_idx + hospitals_per_page, len(hospitals))
+    
+    # Costruisci il messaggio con la lista numerata degli ospedali
+    message_text = (
+        f"🚫 <b>Blacklist Ospedali</b>\n\n"
+        f"Prescrizione: <b>{prescription.get('description', 'N/D')}</b>\n\n"
+        f"<b>Seleziona gli ospedali da escludere:</b>\n"
+        f"❌ = Escluso | ✅ = Incluso\n\n"
+    )
+    
+    # Aggiungi gli ospedali al messaggio
+    for i, idx in enumerate(range(start_idx, end_idx)):
+        hospital = hospitals[idx]
+        is_blacklisted = hospital in current_blacklist
+        status = "❌" if is_blacklisted else "✅"
+        message_text += f"{i+1}. {status} {hospital}\n"
+    
+    message_text += f"\nPagina {page+1}/{total_pages} • Ospedali esclusi: {len(current_blacklist)}"
+    
+    # Crea i pulsanti compatti (solo numeri)
+    keyboard = []
+    current_row = []
+    
+    for i, idx in enumerate(range(start_idx, end_idx)):
+        hospital = hospitals[idx]
+        is_blacklisted = hospital in current_blacklist
+        button_text = f"{i+1}"  # Solo il numero
+        
+        # Aggiungi un indicatore visivo allo stato
+        if is_blacklisted:
+            button_text = f"❌{i+1}"
+        else:
+            button_text = f"✅{i+1}"
+        
+        current_row.append(InlineKeyboardButton(
+            button_text,
+            callback_data=f"toggle_hospital_{idx}_{is_blacklisted}"
+        ))
+        
+        # 5 pulsanti per riga
+        if len(current_row) == 5:
+            keyboard.append(current_row)
+            current_row = []
+    
+    # Aggiungi l'ultima riga se c'è
+    if current_row:
+        keyboard.append(current_row)
+    
+    # Pulsanti di navigazione
+    navigation = []
+    
+    if page > 0:
+        navigation.append(InlineKeyboardButton("⬅️", callback_data="page_prev"))
+    
+    navigation.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="dummy"))
+    
+    if page < total_pages - 1:
+        navigation.append(InlineKeyboardButton("➡️", callback_data="page_next"))
+    
+    keyboard.append(navigation)
+    
+    # Pulsanti per conferma/annulla
+    keyboard.append([
+        InlineKeyboardButton("✅ Conferma", callback_data="confirm_blacklist"),
+        InlineKeyboardButton("❌ Annulla", callback_data="cancel_blacklist")
+    ])
+    
+    try:
+        await query.edit_message_text(
+            message_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"Errore nell'aggiornare il messaggio: {str(e)}")
+        try:
+            # Potrebbe esserci un problema se il messaggio non è cambiato
+            message_text += "\u200B"  # Carattere zero-width space
+            await query.edit_message_text(
+                message_text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="HTML"
+            )
+        except Exception as e2:
+            logger.error(f"Secondo errore nell'aggiornare il messaggio: {str(e2)}")
+    
+    return WAITING_FOR_HOSPITAL_SELECTION
+    
+async def handle_hospital_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gestisce la selezione di un ospedale per aggiungerlo/rimuoverlo dalla blacklist."""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    callback_data = query.data
+    
+    logger.info(f"Hospital selection callback: {callback_data}")
+    
+    if callback_data == "cancel_blacklist":
+        await query.edit_message_text("❌ Operazione annullata.")
+        # Puliamo i dati dell'utente
+        user_data.pop(user_id, None)
+        return ConversationHandler.END
+    
+    if callback_data == "confirm_blacklist":
+        # Aggiorniamo la blacklist nella prescrizione
+        return await confirm_hospital_blacklist(update, context)
+    
+    # Gestione delle pagine
+    if callback_data == "page_prev":
+        if "page" in user_data[user_id]:
+            user_data[user_id]["page"] = max(0, user_data[user_id]["page"] - 1)
+        else:
+            user_data[user_id]["page"] = 0
+        return await show_hospitals_page(query, user_id)
+    
+    if callback_data == "page_next":
+        if "page" not in user_data[user_id]:
+            user_data[user_id]["page"] = 0
+        
+        hospitals = user_data[user_id]["hospitals"]
+        hospitals_per_page = 10
+        total_pages = (len(hospitals) + hospitals_per_page - 1) // hospitals_per_page
+        
+        user_data[user_id]["page"] = min(user_data[user_id]["page"] + 1, total_pages - 1)
+        return await show_hospitals_page(query, user_id)
+    
+    # Estraiamo i dati dalla callback per toggle hospital
+    if callback_data.startswith("toggle_hospital_"):
+        parts = callback_data.split("_")
+        hospital_idx = int(parts[2])
+        is_blacklisted = parts[3] == "True"
+        
+        # Otteniamo i dati necessari
+        hospitals = user_data[user_id]["hospitals"]
+        current_blacklist = user_data[user_id]["current_blacklist"]
+        
+        # Controlliamo che l'indice sia valido
+        if hospital_idx < 0 or hospital_idx >= len(hospitals):
+            await query.edit_message_text("⚠️ Ospedale non valido.")
+            return WAITING_FOR_HOSPITAL_SELECTION
+        
+        # Otteniamo il nome dell'ospedale
+        hospital_name = hospitals[hospital_idx]
+        
+        # Aggiorniamo la blacklist
+        if is_blacklisted:
+            # Rimuoviamo dalla blacklist
+            if hospital_name in current_blacklist:
+                current_blacklist.remove(hospital_name)
+        else:
+            # Aggiungiamo alla blacklist
+            if hospital_name not in current_blacklist:
+                current_blacklist.append(hospital_name)
+        
+        # Aggiorniamo i dati dell'utente
+        user_data[user_id]["current_blacklist"] = current_blacklist
+        
+        # Mostriamo la pagina aggiornata
+        return await show_hospitals_page(query, user_id)
+    
+    # Se arriviamo qui, è una callback non gestita
+    logger.warning(f"Callback non gestita: {callback_data}")
+    return WAITING_FOR_HOSPITAL_SELECTION
+    
+
+async def confirm_hospital_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Conferma e salva la blacklist degli ospedali."""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    
+    # Otteniamo i dati necessari
+    prescription = user_data[user_id]["selected_prescription"]
+    current_blacklist = user_data[user_id]["current_blacklist"]
+    
+    # Carichiamo tutte le prescrizioni
+    all_prescriptions = load_input_data()
+    
+    # Cerchiamo la prescrizione nel dataset completo
+    updated = False
+    for p in all_prescriptions:
+        if (p["fiscal_code"] == prescription["fiscal_code"] and 
+            p["nre"] == prescription["nre"]):
+            
+            # Assicuriamo che esista la configurazione
+            if "config" not in p:
+                p["config"] = {}
+            
+            # Aggiorniamo la blacklist
+            p["config"]["hospitals_blacklist"] = current_blacklist
+            
+            updated = True
+            break
+    
+    if updated:
+        # Salviamo le prescrizioni aggiornate
+        save_input_data(all_prescriptions)
+        
+        # Aggiorniamo il messaggio
+        await query.edit_message_text(
+            f"✅ Blacklist aggiornata per:\n\n"
+            f"Descrizione: {prescription.get('description', 'Non disponibile')}\n"
+            f"Codice Fiscale: {prescription['fiscal_code']}\n"
+            f"NRE: {prescription['nre']}\n\n"
+            f"Ospedali esclusi: {len(current_blacklist)}\n"
+            f"Ora riceverai notifiche solo per ospedali non presenti nella blacklist."
+        )
+    else:
+        await query.edit_message_text("⚠️ Impossibile aggiornare la blacklist.")
+    
+    # Puliamo i dati dell'utente
+    user_data.pop(user_id, None)
+    
+    return ConversationHandler.END
 
 async def add_prescription(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Gestisce l'aggiunta di una nuova prescrizione."""
@@ -1225,18 +1626,10 @@ async def cancel_operation(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Cancellazione da un messaggio di testo
             user_id = update.effective_user.id
             # Ripristiniamo la tastiera principale
-            main_keyboard = ReplyKeyboardMarkup([
-                ["➕ Aggiungi Prescrizione", "➖ Rimuovi Prescrizione"],
-                ["📋 Lista Prescrizioni", "🔄 Verifica Disponibilità"],
-                ["🔔 Gestisci Notifiche", "⏱ Imposta Filtro Date"],
-                ["🏥 Prenota", "🤖 Prenota Automaticamente"],
-                ["📝 Le mie Prenotazioni", "ℹ️ Informazioni"],
-                ["🔑 Autorizza Utente"]
-            ], resize_keyboard=True)
             
             await update.message.reply_text(
                 "❌ Operazione annullata. Cosa vuoi fare?",
-                reply_markup=main_keyboard
+                reply_markup=MAIN_KEYBOARD
             )
         
         # Puliamo i dati dell'utente solo se abbiamo l'ID utente
@@ -1370,14 +1763,14 @@ async def handle_add_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Verifica che i dati dell'utente siano corretti
     if user_id not in user_data:
         await update.message.reply_text(
-            "⚠️ Si è verificato un errore nella sessione. Per favore, ricomincia l'operazione."
+            "⚠️ Si è verificato un errore nella sessione. Per favore, ricomincia l'operazione o premi /cancel."
         )
         return ConversationHandler.END
     
     # Verifica che sia l'azione corretta
     if user_data[user_id].get("action") != "add_prescription":
         await update.message.reply_text(
-            "⚠️ Azione non corretta. Per favore, ricomincia l'operazione."
+            "⚠️ Azione non corretta. Per favore, ricomincia l'operazione o premi /cancel."
         )
         user_data.pop(user_id, None)
         return ConversationHandler.END
@@ -1492,21 +1885,12 @@ async def confirm_add_prescription(update: Update, context: ContextTypes.DEFAULT
         f"Riceverai notifiche quando saranno disponibili nuovi appuntamenti."
     )
     
-    # Suggerimento per la prenotazione automatica
-    main_keyboard = ReplyKeyboardMarkup([
-        ["➕ Aggiungi Prescrizione", "➖ Rimuovi Prescrizione"],
-        ["📋 Lista Prescrizioni", "🔄 Verifica Disponibilità"],
-        ["🔔 Gestisci Notifiche", "⏱ Imposta Filtro Date"],
-        ["🏥 Prenota", "🤖 Prenota Automaticamente"],
-        ["📝 Le mie Prenotazioni", "ℹ️ Informazioni"],
-        ["🔑 Autorizza Utente"]
-    ], resize_keyboard=True)
-    
+
     await context.bot.send_message(
         chat_id=user_id,
         text="💡 Suggerimento: puoi attivare la prenotazione automatica usando la funzione '🤖 Prenota Automaticamente' "
              "per prenotare automaticamente il primo slot disponibile.",
-        reply_markup=main_keyboard
+        reply_markup=MAIN_KEYBOARD
     )
     
     # Puliamo i dati dell'utente
@@ -1945,18 +2329,24 @@ async def book_prescription(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Non hai prescrizioni da prenotare.")
         return ConversationHandler.END
     
-    # Creiamo i pulsanti per le prescrizioni
-    keyboard = []
+    # Costruiamo il corpo del messaggio con le informazioni dettagliate
+    message = "🏥 <b>Prenotazione</b>\n\nSeleziona la prescrizione da prenotare:\n\n"
     
     for idx, prescription in enumerate(user_prescriptions):
         desc = prescription.get("description", "Prescrizione")
         fiscal_code = prescription["fiscal_code"]
         nre = prescription["nre"]
         
-        # Creiamo un pulsante con identificativo della prescrizione
+        message += f"{idx+1}. <b>{desc}</b>\n"
+        message += f"   CF: <code>{fiscal_code}</code> • NRE: <code>{nre}</code>\n\n"
+    
+    # Creiamo pulsanti più semplici e compatti
+    keyboard = []
+    
+    for idx, _ in enumerate(user_prescriptions):
         keyboard.append([
             InlineKeyboardButton(
-                f"{idx+1}. {desc[:30]}... ({fiscal_code[-4:]})",
+                f"{idx+1}",  # Solo il numero
                 callback_data=f"book_{idx}"
             )
         ])
@@ -1971,12 +2361,13 @@ async def book_prescription(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     
     await update.message.reply_text(
-        "Seleziona la prescrizione da prenotare:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        message,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML"
     )
     
     return WAITING_FOR_BOOKING_CHOICE
-
+    
 async def handle_booking_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -3259,11 +3650,14 @@ async def show_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔄 <b>Verifica Disponibilità</b> - Controlla subito le disponibilità\n"
         "🔔 <b>Gestisci Notifiche</b> - Attiva/disattiva notifiche per una prescrizione\n"
         "⏱ <b>Imposta Filtro Date</b> - Filtra le notifiche entro un periodo di mesi\n"
+        "🚫 <b>Blacklist Ospedali</b> - Escludi ospedali specifici dalle notifiche\n"
         "🏥 <b>Prenota</b> - Prenota un appuntamento per una prescrizione\n"
         "🤖 <b>Prenota Automaticamente</b> - Attiva/disattiva la prenotazione automatica\n"
         "📝 <b>Le mie Prenotazioni</b> - Visualizza e gestisci le prenotazioni attive\n\n"
         "<b>Prenotazione Automatica:</b>\n"
         "Quando attivi la prenotazione automatica per una prescrizione, il bot prenota automaticamente il primo slot disponibile utilizzando i dati di contatto salvati, senza richiedere ulteriori conferme.\n\n"
+        "<b>Blacklist Ospedali:</b>\n"
+        "Puoi escludere specifici ospedali dalle notifiche per ogni prescrizione, ricevendo avvisi solo per le strutture che ti interessano.\n\n"
         "<b>Frequenza di controllo:</b> Ogni 5 minuti\n\n"
         "<b>Note:</b>\n"
         "• Il bot notifica solo quando ci sono cambiamenti significativi\n"
@@ -3364,21 +3758,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"Primo utente {user_id} aggiunto come amministratore")
             
             # Inviamo un messaggio di benvenuto come amministratore
-            keyboard = [
-                ["➕ Aggiungi Prescrizione", "➖ Rimuovi Prescrizione"],
-                ["📋 Lista Prescrizioni", "🔄 Verifica Disponibilità"],
-                ["🔔 Gestisci Notifiche", "⏱ Imposta Filtro Date"],
-                ["🏥 Prenota", "🤖 Prenota Automaticamente"],
-                ["📝 Le mie Prenotazioni", "ℹ️ Informazioni"],
-                ["🔑 Autorizza Utente"]
-            ]
-            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-            
+
             await update.message.reply_text(
                 f"👑 Benvenuto, {update.effective_user.first_name}!\n\n"
                 "Sei stato impostato come amministratore del bot.\n\n"
                 "Questo bot ti aiuterà a monitorare le disponibilità del Servizio Sanitario Nazionale.",
-                reply_markup=reply_markup
+                reply_markup=MAIN_KEYBOARD
             )
             return
         else:
@@ -3408,20 +3793,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await list_bookings(update, context)
     elif text == "ℹ️ Informazioni":
         return await show_info(update, context)
+    elif text == "🚫 Blacklist Ospedali":
+        return await manage_hospital_blacklist(update, context)
     elif text == "🔑 Autorizza Utente":
         return await authorize_user(update, context)
     else:
         # Messaggio di default con la tastiera aggiornata
         await update.message.reply_text(
             "Usa i pulsanti sotto per interagire con il bot.",
-            reply_markup=ReplyKeyboardMarkup([
-                ["➕ Aggiungi Prescrizione", "➖ Rimuovi Prescrizione"],
-                ["📋 Lista Prescrizioni", "🔄 Verifica Disponibilità"],
-                ["🔔 Gestisci Notifiche", "⏱ Imposta Filtro Date"],
-                ["🏥 Prenota", "🤖 Prenota Automaticamente"],
-                ["📝 Le mie Prenotazioni", "ℹ️ Informazioni"],
-                ["🔑 Autorizza Utente"]
-            ], resize_keyboard=True)
+            reply_markup=MAIN_KEYBOARD
         )
 
 async def error_handler(update, context):
@@ -3457,20 +3837,12 @@ async def error_handler(update, context):
     
     # Ripristina la tastiera principale se possibile
     if update and update.effective_chat and update.effective_user:
-        main_keyboard = ReplyKeyboardMarkup([
-            ["➕ Aggiungi Prescrizione", "➖ Rimuovi Prescrizione"],
-            ["📋 Lista Prescrizioni", "🔄 Verifica Disponibilità"],
-            ["🔔 Gestisci Notifiche", "⏱ Imposta Filtro Date"],
-            ["🏥 Prenota", "🤖 Prenota Automaticamente"],
-            ["📝 Le mie Prenotazioni", "ℹ️ Informazioni"],
-            ["🔑 Autorizza Utente"]
-        ], resize_keyboard=True)
-        
+
         try:
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
                 text="🔄 Sessione ripristinata. Seleziona un'operazione:",
-                reply_markup=main_keyboard
+                reply_markup=MAIN_KEYBOARD
             )
         except Exception as e:
             logger.error(f"Errore nel ripristino della tastiera: {e}")
@@ -3487,15 +3859,8 @@ async def error_recovery(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         "⚠️ Si è verificato un problema con l'operazione corrente. "
-        "Per favore, ricomincia.",
-        reply_markup=ReplyKeyboardMarkup([
-            ["➕ Aggiungi Prescrizione", "➖ Rimuovi Prescrizione"],
-            ["📋 Lista Prescrizioni", "🔄 Verifica Disponibilità"],
-            ["🔔 Gestisci Notifiche", "⏱ Imposta Filtro Date"],
-            ["🏥 Prenota", "🤖 Prenota Automaticamente"],
-            ["📝 Le mie Prenotazioni", "ℹ️ Informazioni"],
-            ["🔑 Autorizza Utente"]
-        ], resize_keyboard=True)
+        "Per favore, ricomincia o premi /cancel.",
+        reply_markup=MAIN_KEYBOARD
     )
     
     return ConversationHandler.END
@@ -3581,7 +3946,17 @@ def setup_handlers(application):
                 CallbackQueryHandler(handle_booking_to_cancel, pattern="^cancel_book_"),
                 CallbackQueryHandler(confirm_cancel_booking, pattern="^confirm_cancel_"),
                 CallbackQueryHandler(cancel_operation, pattern="^cancel_cancel_book$")
-            ]
+            ],
+            WAITING_FOR_PRESCRIPTION_BLACKLIST: [
+                CallbackQueryHandler(handle_prescription_blacklist, pattern="^blacklist_"),
+                CallbackQueryHandler(cancel_operation, pattern="^cancel_")
+            ],
+            WAITING_FOR_HOSPITAL_SELECTION: [
+                CallbackQueryHandler(handle_hospital_selection, pattern="^toggle_hospital_"),
+                CallbackQueryHandler(handle_hospital_selection, pattern="^page_"),
+                CallbackQueryHandler(confirm_hospital_blacklist, pattern="^confirm_blacklist"),
+                CallbackQueryHandler(cancel_operation, pattern="^cancel_")
+            ],
         },
         fallbacks=[
             CommandHandler("cancel", cancel_operation),
@@ -3619,7 +3994,7 @@ def setup_handlers(application):
     # Gestore errori
     application.add_error_handler(error_handler)
      
----- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\modules\data_utils.py ---- 
+---- File: C:\Users\luca.tomei\Downloads\aaaaa\LazioHealthMonitorBot - Copy\modules\data_utils.py ---- 
 import os
 import json
 import logging
@@ -3851,7 +4226,7 @@ def is_similar_datetime(date1_str, date2_str, minutes_threshold=30):
         return same_day and diff_minutes <= minutes_threshold
     except Exception:
         return False 
----- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\modules\locations_db.py ---- 
+---- File: C:\Users\luca.tomei\Downloads\aaaaa\LazioHealthMonitorBot - Copy\modules\locations_db.py ---- 
 import json
 import os
 import logging
@@ -3949,7 +4324,7 @@ def update_location_db(hospital_name, address, location_db):
     # Per rispettare i limiti di Nominatim, attende 1 secondo tra le richieste
     time.sleep(.3)
  
----- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\modules\monitoring.py ---- 
+---- File: C:\Users\luca.tomei\Downloads\aaaaa\LazioHealthMonitorBot - Copy\modules\monitoring.py ---- 
 import asyncio
 import time
 import logging
@@ -4029,7 +4404,7 @@ async def start_monitoring():
             logger.error(f"Errore nel servizio di monitoraggio: {str(e)}")
             # In caso di errore, aspetta 1 minuto e riprova
             await asyncio.sleep(60) 
----- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\modules\prescription_processor.py ---- 
+---- File: C:\Users\luca.tomei\Downloads\aaaaa\LazioHealthMonitorBot - Copy\modules\prescription_processor.py ---- 
 import asyncio, logging, json, os
 
 # Importiamo le variabili globali e funzioni da altri moduli
@@ -4057,7 +4432,8 @@ def compare_availabilities(previous, current, fiscal_code, nre, prescription_nam
         "min_changes_to_notify": 2,
         "time_threshold_minutes": 60,
         "show_all_current": True,  # Mostra tutte le disponibilità attuali
-        "months_limit": None       # Nessun limite di mesi predefinito
+        "months_limit": None,       # Nessun limite di mesi predefinito
+        "hospitals_blacklist": []
     }
     
     # Usa la configurazione fornita o quella predefinita
@@ -4069,6 +4445,18 @@ def compare_availabilities(previous, current, fiscal_code, nre, prescription_nam
             if key not in config:
                 config[key] = value
     
+    # Otteniamo la blacklist degli ospedali
+    hospitals_blacklist = config.get("hospitals_blacklist", [])
+    
+    # Filtriamo le disponibilità (rimuovendo gli ospedali in blacklist)
+    if hospitals_blacklist:
+        filtered_current = []
+        for avail in current:
+            hospital_name = avail['hospital']['name']
+            if hospital_name not in hospitals_blacklist:
+                filtered_current.append(avail)
+        current = filtered_current
+    
     # Se è la prima volta che controlliamo questa prescrizione
     if not previous or not current:
         # Se non c'erano dati precedenti, consideriamo tutto come nuovo ma non spammiamo
@@ -4078,10 +4466,14 @@ def compare_availabilities(previous, current, fiscal_code, nre, prescription_nam
             if months_limit is not None:
                 filtered_current = [
                     avail for avail in current 
-                    if is_date_within_range(avail['date'], months_limit)
+                    if is_date_within_range(avail['date'], months_limit) and 
+                       avail['hospital']['name'] not in hospitals_blacklist
                 ]
             else:
-                filtered_current = current
+                filtered_current = [
+                    avail for avail in current
+                    if avail['hospital']['name'] not in hospitals_blacklist
+                ]
             
             # Se non ci sono disponibilità nel range, non mostriamo nulla
             if not filtered_current:
@@ -4484,8 +4876,8 @@ def process_prescription(prescription, previous_data, chat_id=None):
     current_availabilities = availabilities['content']
     
     # *** In questo punto aggiorniamo il database delle location ***
-    if os.path.exists("locations.json"):
-        with open("locations.json", "r") as f:
+    if os.path.exists("../locations.json"):
+        with open("../locations.json", "r") as f:
             locations_db = json.load(f)
     else:
         locations_db = {}
@@ -4498,7 +4890,7 @@ def process_prescription(prescription, previous_data, chat_id=None):
         update_location_db(hospital_name, address, locations_db)
     
     # Salva le modifiche sul file JSON
-    with open("locations.json", "w") as f:
+    with open("../locations.json", "w") as f:
         json.dump(locations_db, f, indent=2)
     
     # Compare with previous data to detect changes
@@ -4658,10 +5050,6 @@ La prenotazione è stata effettuata automaticamente. Controlla la tua email per 
     previous_data[prescription_key] = current_availabilities
     
     return True, prescription_name
-    
-    
-    
-    
      
----- File: C:\Users\luca.tomei\Downloads\LazioHealthMonitorBot\modules\__init__.py ---- 
+---- File: C:\Users\luca.tomei\Downloads\aaaaa\LazioHealthMonitorBot - Copy\modules\__init__.py ---- 
  
