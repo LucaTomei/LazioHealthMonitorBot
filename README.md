@@ -251,11 +251,3 @@ Per domande, suggerimenti o segnalazioni di bug, apri un issue su GitHub o conta
 
 ⚠️ **Disclaimer**: Questo bot utilizza un'API non ufficiale del sistema RecUP della Regione Lazio. È stato creato solo per scopi personali e educativi. L'utilizzo del bot è a tuo rischio e pericolo. L'autore non è responsabile per eventuali problemi derivanti dall'utilizzo di questo software.
 
-
-## 📜 Licenza
-
-<<<<<<< HEAD
-Questo progetto è rilasciato sotto licenza MIT. Vedi il file [LICENSE](LICENSE) per i dettagli.
-=======
-Questo progetto è rilasciato sotto licenza MIT. Vedi il file [LICENSE](LICENSE) per i dettagli.
->>>>>>> d33d5c2 (Whitelist All / Blacklist all fixes. Code alignment)
