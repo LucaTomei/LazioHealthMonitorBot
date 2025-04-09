@@ -254,4 +254,8 @@ Per domande, suggerimenti o segnalazioni di bug, apri un issue su GitHub o conta
 
 ## 📜 Licenza
 
+<<<<<<< HEAD
 Questo progetto è rilasciato sotto licenza MIT. Vedi il file [LICENSE](LICENSE) per i dettagli.
+=======
+Questo progetto è rilasciato sotto licenza MIT. Vedi il file [LICENSE](LICENSE) per i dettagli.
+>>>>>>> d33d5c2 (Whitelist All / Blacklist all fixes. Code alignment)
