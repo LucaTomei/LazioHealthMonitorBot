@@ -16,14 +16,17 @@ from io import BytesIO
 
 # Importiamo le variabili globali dal modulo principale
 from config import (
-    logger, user_data, authorized_users, MAIN_KEYBOARD,
+    logger, user_data, authorized_users, MAIN_KEYBOARD, ADMIN_KEYBOARD, is_admin, PDF_FOLDER,
     WAITING_FOR_FISCAL_CODE, WAITING_FOR_NRE, CONFIRM_ADD,
     WAITING_FOR_PRESCRIPTION_TO_DELETE, WAITING_FOR_PRESCRIPTION_TO_TOGGLE,
     WAITING_FOR_DATE_FILTER, WAITING_FOR_MONTHS_LIMIT, CONFIRM_DATE_FILTER,
     WAITING_FOR_BOOKING_CHOICE, WAITING_FOR_BOOKING_CONFIRMATION, WAITING_FOR_PHONE,
     WAITING_FOR_EMAIL, WAITING_FOR_SLOT_CHOICE, WAITING_FOR_BOOKING_TO_CANCEL, WAITING_FOR_AUTO_BOOK_CHOICE, AUTHORIZING,
-    WAITING_FOR_PRESCRIPTION_BLACKLIST, WAITING_FOR_HOSPITAL_SELECTION
+    WAITING_FOR_PRESCRIPTION_BLACKLIST, WAITING_FOR_HOSPITAL_SELECTION,
+    WAITING_FOR_BROADCAST_MESSAGE, WAITING_FOR_BROADCAST_CONFIRMATION,
+    WAITING_FOR_FISCAL_CODE_REPORT, WAITING_FOR_PASSWORD_REPORT, WAITING_FOR_REPORT_CHOICE, WAITING_FOR_REPORTS_MONITORING_ACTION
 )
+
 
 # Importiamo le funzioni da altri moduli
 from modules.data_utils import (
@@ -32,6 +35,15 @@ from modules.data_utils import (
     load_previous_data, save_previous_data
 )
 from modules.prescription_processor import process_prescription
+
+from modules.locations_db import load_locations_db
+
+from modules.reports_client import (
+    download_reports, download_report_document, 
+    download_all_report_documents
+)
+
+from io import BytesIO
 
 # =============================================================================
 # FUNZIONI DI UTILITY PER IL BOT
@@ -59,6 +71,913 @@ async def send_telegram_message(chat_id, text, parse_mode="HTML"):
         logger.error(f"Errore nell'inviare messaggio Telegram: {str(e)}")
         return False
 
+# =============================================================================
+# GESTORI DOWNLOAD REFERTI BOT
+# =============================================================================
+async def download_medical_reports(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Avvia il processo di monitoraggio dei referti medici."""
+    user_id = update.effective_user.id
+    
+    # Controlliamo se l'utente è autorizzato
+    if str(user_id) not in authorized_users:
+        await update.message.reply_text("🔒 Non sei autorizzato ad utilizzare questa funzione.")
+        return
+    
+    # Tastiera con pulsante Annulla
+    cancel_keyboard = ReplyKeyboardMarkup([["❌ Annulla"]], resize_keyboard=True)
+    
+    await update.message.reply_text(
+        "📋 <b>Monitoraggio Referti Medici</b>\n\n"
+        "Questo servizio controllerà periodicamente la disponibilità di nuovi referti "
+        "e ti invierà una notifica quando saranno disponibili.\n\n"
+        "Per configurare il monitoraggio, ho bisogno di alcune informazioni.\n\n"
+        "Per prima cosa, inserisci il tuo <b>codice fiscale</b>:",
+        reply_markup=cancel_keyboard,
+        parse_mode="HTML"
+    )
+    
+    # Inizializziamo i dati dell'utente
+    user_data[user_id] = {"action": "monitor_reports"}
+    
+    return WAITING_FOR_FISCAL_CODE_REPORT
+
+async def handle_fiscal_code_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gestisce l'input del codice fiscale per il monitoraggio dei referti."""
+    user_id = update.effective_user.id
+    text = update.message.text.strip()
+    
+    # Controlliamo se l'utente vuole annullare
+    if text == "❌ Annulla" or text.lower() == "/cancel":
+        return await cancel_operation(update, context)
+    
+    fiscal_code = text.upper()
+    
+    # Validazione base del codice fiscale (16 caratteri alfanumerici)
+    if not re.match("^[A-Z0-9]{16}$", fiscal_code):
+        await update.message.reply_text(
+            "⚠️ Il codice fiscale inserito non sembra valido. Deve essere composto da 16 caratteri alfanumerici.\n\n"
+            "Per favore, riprova o scrivi ❌ Annulla per tornare al menu principale:"
+        )
+        return WAITING_FOR_FISCAL_CODE_REPORT
+    
+    # Salviamo il codice fiscale
+    user_data[user_id]["fiscal_code"] = fiscal_code
+    
+    # Cerchiamo se il codice fiscale è presente nelle prescrizioni monitorate
+    # per estrarre automaticamente il codice TSCNS
+    tscns_code = "8038000"  # Valore predefinito
+    prescriptions = load_input_data()
+    
+    for prescription in prescriptions:
+        if prescription["fiscal_code"] == fiscal_code:
+            # Controlliamo se ci sono informazioni del paziente con il codice della tessera sanitaria
+            if "patient_info" in prescription and "teamCard" in prescription["patient_info"]:
+                team_card_code = prescription["patient_info"]["teamCard"].get("code", "")
+                if team_card_code:
+                    # Usiamo il codice completo della tessera sanitaria
+                    tscns_code = team_card_code
+                    logger.info(f"Trovato codice tessera sanitaria {tscns_code} per il CF {fiscal_code} nelle prescrizioni")
+                    break
+    
+    # Salviamo il codice TSCNS (sia quello trovato che quello predefinito)
+    user_data[user_id]["tscns"] = tscns_code
+    
+    # Aggiungiamo un messaggio che mostra il codice tessera sanitaria usato
+    tscns_info = ""
+    if tscns_code != "8038000":
+        tscns_info = f"\nCodice tessera sanitaria: <code>{tscns_code}</code> (estratto automaticamente)"
+    else:
+        tscns_info = f"\nCodice tessera sanitaria: <code>{tscns_code}</code> (valore predefinito)"
+    
+    await update.message.reply_text(
+        f"Codice fiscale: {fiscal_code}{tscns_info}\n\n"
+        "Ora inserisci la <b>password</b> che hai ricevuto via SMS dalla Regione Lazio.\n\n"
+        "<i>Nota: questa è la password che ricevi via SMS con testo simile a: "
+        "'Regione Lazio su https://www.salutelazio.it/scarica-il-tuo-referto sara' possibile recuperare l'esito dell'esame effettuato. La password e' XXXXXXXXXX'</i>",
+        reply_markup=ReplyKeyboardMarkup([["❌ Annulla"]], resize_keyboard=True),
+        parse_mode="HTML"
+    )
+    
+    return WAITING_FOR_PASSWORD_REPORT
+ 
+async def handle_password_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gestisce l'input della password per il monitoraggio dei referti."""
+    user_id = update.effective_user.id
+    password = update.message.text.strip()
+    
+    # Controlliamo se l'utente vuole annullare
+    if password == "❌ Annulla" or password.lower() == "/cancel":
+        return await cancel_operation(update, context)
+    
+    # Validazione base della password (10 caratteri alfanumerici, come nell'esempio SMS)
+    if not re.match("^[A-Z0-9]{10}$", password.upper()):
+        await update.message.reply_text(
+            "⚠️ La password inserita non sembra valida. Deve essere composta da 10 caratteri alfanumerici, "
+            "come quella ricevuta via SMS.\n\n"
+            "Per favore, riprova o scrivi ❌ Annulla per tornare al menu principale:",
+            parse_mode="HTML"
+        )
+        return WAITING_FOR_PASSWORD_REPORT
+    
+    # Salviamo la password
+    user_data[user_id]["password"] = password.upper()
+    
+    # Otteniamo i dati necessari
+    fiscal_code = user_data[user_id]["fiscal_code"]
+    tscns = user_data[user_id]["tscns"]
+    
+    # Verifichiamo che i dati siano validi facendo un test
+    waiting_msg = await update.message.reply_text(
+        f"🔍 Sto verificando le credenziali... Potrebbe richiedere alcuni secondi."
+    )
+    
+    # Importa la nuova funzione per aggiungere il monitoraggio
+    from modules.reports_monitor import add_report_monitoring
+    
+    # Proviamo a fare una richiesta di test
+    from modules.reports_client import download_reports
+    test_reports = download_reports(fiscal_code, password.upper(), tscns)
+    
+    # Configuriamo il monitoraggio anche se non ci sono referti
+    # Questo è il cambiamento principale: non usiamo la mancanza di referti come errore
+    success = add_report_monitoring(
+        fiscal_code=fiscal_code,
+        password=password.upper(),
+        tscns=tscns,
+        telegram_chat_id=user_id
+    )
+    
+    if success:
+        await waiting_msg.delete()
+        
+        # Ripristina la tastiera principale
+        keyboard = ADMIN_KEYBOARD if is_admin(user_id, authorized_users) else MAIN_KEYBOARD
+        
+        # Modifichiamo il messaggio in base alla presenza o meno di referti
+        if test_reports and len(test_reports) > 0:
+            num_reports = len(test_reports)
+            message = (
+                f"✅ <b>Monitoraggio referti attivato con successo!</b>\n\n"
+                f"Il sistema verificherà periodicamente la disponibilità di nuovi referti per:\n"
+                f"<b>Codice Fiscale:</b> <code>{fiscal_code}</code>\n\n"
+                f"Attualmente sono disponibili {num_reports} referti.\n\n"
+                f"Se vuoi scaricare i referti esistenti, usa il comando '📋 Gestisci Monitoraggi Referti'."
+            )
+        else:
+            message = (
+                f"✅ <b>Monitoraggio referti attivato con successo!</b>\n\n"
+                f"Il sistema verificherà periodicamente la disponibilità di nuovi referti per:\n"
+                f"<b>Codice Fiscale:</b> <code>{fiscal_code}</code>\n\n"
+                f"Attualmente non sono disponibili referti. Riceverai una notifica "
+                f"non appena un referto sarà disponibile.\n\n"
+                f"Il sistema verificherà ogni 5 minuti. Le credenziali sono state salvate correttamente."
+            )
+        
+        await update.message.reply_text(
+            message,
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+    else:
+        await waiting_msg.delete()
+        await update.message.reply_text(
+            "❌ Si è verificato un errore nell'attivazione del monitoraggio. Riprova più tardi."
+        )
+    
+    # Puliamo i dati dell'utente
+    user_data.pop(user_id, None)
+    
+    return ConversationHandler.END
+    
+
+async def list_report_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Mostra la lista dei monitoraggi referti attivi."""
+    user_id = update.effective_user.id
+    
+    # Controlliamo se l'utente è autorizzato
+    if str(user_id) not in authorized_users:
+        await update.message.reply_text("🔒 Non sei autorizzato ad utilizzare questa funzione.")
+        return
+    
+    # Importa la funzione necessaria
+    from modules.reports_monitor import load_reports_monitoring
+    
+    # Carica i dati di monitoraggio
+    monitoring_data = load_reports_monitoring()
+    
+    # Filtra i monitoraggi dell'utente (o tutti se è admin)
+    is_admin_user = is_admin(user_id, authorized_users)
+    
+    if is_admin_user:
+        # L'admin vede tutti i monitoraggi
+        user_monitoring = monitoring_data
+    else:
+        # Gli utenti normali vedono solo i propri
+        user_monitoring = [m for m in monitoring_data if m.get("telegram_chat_id") == user_id]
+    
+    if not user_monitoring:
+        await update.message.reply_text("📋 Non hai monitoraggi referti attivi.")
+        return
+    
+    # Costruisci il messaggio
+    message = "📋 <b>Monitoraggi Referti Attivi:</b>\n\n"
+    
+    for idx, monitoring in enumerate(user_monitoring):
+        fiscal_code = monitoring["fiscal_code"]
+        enabled = monitoring.get("enabled", True)
+        last_check = monitoring.get("last_check", "Mai")
+        known_reports = monitoring.get("known_reports", [])
+        
+        # Formatta l'ultimo controllo
+        if last_check and last_check != "Mai":
+            try:
+                check_date = datetime.fromisoformat(last_check)
+                formatted_check = check_date.strftime("%d/%m/%Y %H:%M:%S")
+            except:
+                formatted_check = last_check
+        else:
+            formatted_check = "Mai controllato"
+        
+        # Verifica se è attivo
+        status = "✅ attivo" if enabled else "❌ disattivato"
+        
+        message += f"{idx+1}. <b>Codice Fiscale:</b> <code>{fiscal_code}</code>\n"
+        message += f"   Stato: {status}\n"
+        message += f"   Ultimo controllo: {formatted_check}\n"
+        message += f"   Referti noti: {len(known_reports)}\n\n"
+    
+    # Crea la tastiera inline
+    keyboard = []
+    
+    # Pulsanti per disattivare/attivare
+    for idx, monitoring in enumerate(user_monitoring):
+        fiscal_code = monitoring["fiscal_code"]
+        enabled = monitoring.get("enabled", True)
+        
+        action = "disattiva" if enabled else "attiva"
+        keyboard.append([
+            InlineKeyboardButton(f"{'❌' if enabled else '✅'} {action.capitalize()} {fiscal_code}", 
+                               callback_data=f"toggle_monitor_{idx}")
+        ])
+    
+    # Pulsante per rimuovere
+    for idx, monitoring in enumerate(user_monitoring):
+        fiscal_code = monitoring["fiscal_code"]
+        keyboard.append([
+            InlineKeyboardButton(f"🗑️ Rimuovi {fiscal_code}", 
+                               callback_data=f"remove_monitor_{idx}")
+        ])
+    
+    # Pulsante per verificare subito tutti i monitoraggi
+    keyboard.append([
+        InlineKeyboardButton("🔄 Verifica Ora", callback_data="check_reports_now")
+    ])
+    
+    await update.message.reply_text(
+        message,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML"
+    )
+
+async def handle_report_monitoring_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gestisce le azioni sui monitoraggi referti (toggle, remove, check)."""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    callback_data = query.data  # Estrai il valore PRIMA di usarlo
+    
+    logger.info(f"Ricevuta callback per monitoraggio: {callback_data}")
+    
+    # Importa le funzioni necessarie
+    from modules.reports_monitor import (
+        load_reports_monitoring, save_reports_monitoring, 
+        toggle_report_monitoring, remove_report_monitoring,
+        check_new_reports
+    )
+    
+    # Carica i dati di monitoraggio
+    monitoring_data = load_reports_monitoring()
+    
+    # Filtra i monitoraggi dell'utente (o tutti se è admin)
+    is_admin_user = is_admin(user_id, authorized_users)
+    
+    if is_admin_user:
+        # L'admin vede tutti i monitoraggi
+        user_monitoring = monitoring_data
+    else:
+        # Gli utenti normali vedono solo i propri
+        user_monitoring = [m for m in monitoring_data if m.get("telegram_chat_id") == user_id]
+    
+    if callback_data.startswith("toggle_monitor_"):
+        # Toggle del monitoraggio
+        idx = int(callback_data.split("_")[-1])
+        
+        if idx < 0 or idx >= len(user_monitoring):
+            await query.edit_message_text("⚠️ Indice non valido.")
+            return ConversationHandler.END
+        
+        fiscal_code = user_monitoring[idx]["fiscal_code"]
+        
+        # Inverti lo stato
+        success, new_state = toggle_report_monitoring(fiscal_code)
+        
+        if success:
+            state_text = "attivato" if new_state else "disattivato"
+            status_emoji = "✅" if new_state else "❌"
+            
+            # Ricarica i dati per avere l'ultimo stato
+            updated_monitoring = load_reports_monitoring()
+            
+            # Ricostruisci la lista dei monitoraggi
+            keyboard = []
+            current_row = []
+            
+            for midx, monitoring in enumerate(updated_monitoring):
+                # Solo i monitoraggi dell'utente corrente
+                if (is_admin_user or 
+                    str(monitoring.get("telegram_chat_id")) == str(user_id)):
+                    fc = monitoring["fiscal_code"]
+                    pw = monitoring["password"]
+                    enabled = monitoring.get("enabled", True)
+                    
+                    status = "✅" if enabled else "❌"
+                    current_row.append(
+                        InlineKeyboardButton(
+                            f"{status} {fc}:{pw}", 
+                            callback_data=f"toggle_monitor_{midx}"
+                        )
+                    )
+                    
+                    # 3 pulsanti per riga
+                    if len(current_row) == 3:
+                        keyboard.append(current_row)
+                        current_row = []
+            
+            # Aggiungi ultima riga incompleta
+            if current_row:
+                keyboard.append(current_row)
+            
+            # Aggiungi pulsanti di rimozione
+            remove_row = []
+            for midx, monitoring in enumerate(updated_monitoring):
+                if (is_admin_user or 
+                    str(monitoring.get("telegram_chat_id")) == str(user_id)):
+                    fc = monitoring["fiscal_code"]
+                    pw = monitoring["password"]
+                    remove_row.append(
+                        InlineKeyboardButton(
+                            f"🗑️ {fc}:{pw}", 
+                            callback_data=f"remove_monitor_{midx}"
+                        )
+                    )
+                    
+                    # 3 pulsanti per riga
+                    if len(remove_row) == 3:
+                        keyboard.append(remove_row)
+                        remove_row = []
+            
+            # Aggiungi ultima riga incompleta di rimozione
+            if remove_row:
+                keyboard.append(remove_row)
+            
+            # Aggiungi pulsante di verifica
+            keyboard.append([
+                InlineKeyboardButton("🔄 Verifica Ora", callback_data="check_reports_now")
+            ])
+            
+            await query.edit_message_text(
+                f"{status_emoji} Monitoraggio referti {state_text} per il codice fiscale: <code>{fiscal_code}</code>\n\n",
+                #reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="HTML"
+            )
+        else:
+            await query.edit_message_text("⚠️ Errore nella modifica dello stato del monitoraggio.")
+        
+        return ConversationHandler.END
+    
+    elif callback_data.startswith("remove_monitor_"):
+        # Rimozione del monitoraggio
+        idx = int(callback_data.split("_")[-1])
+        
+        if idx < 0 or idx >= len(user_monitoring):
+            await query.edit_message_text("⚠️ Indice non valido.")
+            return ConversationHandler.END
+        
+        fiscal_code = user_monitoring[idx]["fiscal_code"]
+        
+        # Rimuovi il monitoraggio
+        success = remove_report_monitoring(fiscal_code)
+        
+        if success:
+            # Ricarica i dati per aggiornare la vista
+            updated_monitoring = load_reports_monitoring()
+            
+            # Ricostruisci la lista dei monitoraggi
+            keyboard = []
+            current_row = []
+            
+            for midx, monitoring in enumerate(updated_monitoring):
+                # Solo i monitoraggi dell'utente corrente
+                if (is_admin_user or 
+                    str(monitoring.get("telegram_chat_id")) == str(user_id)):
+                    fc = monitoring["fiscal_code"]
+                    enabled = monitoring.get("enabled", True)
+                    
+                    status = "✅" if enabled else "❌"
+                    current_row.append(
+                        InlineKeyboardButton(
+                            f"{status} {fc[-4:]}", 
+                            callback_data=f"toggle_monitor_{midx}"
+                        )
+                    )
+                    
+                    # 3 pulsanti per riga
+                    if len(current_row) == 3:
+                        keyboard.append(current_row)
+                        current_row = []
+            
+            # Aggiungi ultima riga incompleta
+            if current_row:
+                keyboard.append(current_row)
+            
+            # Aggiungi pulsanti di rimozione
+            remove_row = []
+            for midx, monitoring in enumerate(updated_monitoring):
+                if (is_admin_user or 
+                    str(monitoring.get("telegram_chat_id")) == str(user_id)):
+                    fc = monitoring["fiscal_code"]
+                    remove_row.append(
+                        InlineKeyboardButton(
+                            f"🗑️ {fc[-4:]}", 
+                            callback_data=f"remove_monitor_{midx}"
+                        )
+                    )
+                    
+                    # 3 pulsanti per riga
+                    if len(remove_row) == 3:
+                        keyboard.append(remove_row)
+                        remove_row = []
+            
+            # Aggiungi ultima riga incompleta di rimozione
+            if remove_row:
+                keyboard.append(remove_row)
+            
+            # Aggiungi pulsante di verifica
+            keyboard.append([
+                InlineKeyboardButton("🔄 Verifica Ora", callback_data="check_reports_now")
+            ])
+            
+            await query.edit_message_text(
+                f"✅ Monitoraggio referti rimosso per il codice fiscale: <code>{fiscal_code}</code>\n\n"
+                f"Seleziona un'azione:",
+                #reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="HTML"
+            )
+        else:
+            await query.edit_message_text("⚠️ Errore nella rimozione del monitoraggio.")
+        
+        return ConversationHandler.END
+    
+    elif callback_data == "check_reports_now":
+        # Verifica immediata dei referti
+        await query.edit_message_text("🔍 Verifica in corso... Attendere prego.")
+        
+        try:
+            # Esegui il controllo
+            total_checked, total_notifications, errors = check_new_reports()
+            
+            # Mostra il risultato
+            result_message = (
+                f"✅ Verifica completata!\n\n"
+                f"Monitoraggi controllati: {total_checked}\n"
+                f"Notifiche inviate: {total_notifications}\n"
+            )
+            
+            if errors > 0:
+                result_message += f"⚠️ Errori riscontrati: {errors}\n"
+            
+            result_message += "\nSe sono stati trovati nuovi referti, riceverai notifiche separate."
+            
+            # Ricostruisci la lista dei monitoraggi
+            updated_monitoring = load_reports_monitoring()
+            
+            keyboard = []
+            current_row = []
+            
+            for midx, monitoring in enumerate(updated_monitoring):
+                # Solo i monitoraggi dell'utente corrente
+                if (is_admin_user or 
+                    str(monitoring.get("telegram_chat_id")) == str(user_id)):
+                    fc = monitoring["fiscal_code"]
+                    enabled = monitoring.get("enabled", True)
+                    
+                    status = "✅" if enabled else "❌"
+                    current_row.append(
+                        InlineKeyboardButton(
+                            f"{status} {fc[-4:]}", 
+                            callback_data=f"toggle_monitor_{midx}"
+                        )
+                    )
+                    
+                    # 3 pulsanti per riga
+                    if len(current_row) == 3:
+                        keyboard.append(current_row)
+                        current_row = []
+            
+            # Aggiungi ultima riga incompleta
+            if current_row:
+                keyboard.append(current_row)
+            
+            # Aggiungi pulsanti di rimozione
+            remove_row = []
+            for midx, monitoring in enumerate(updated_monitoring):
+                if (is_admin_user or 
+                    str(monitoring.get("telegram_chat_id")) == str(user_id)):
+                    fc = monitoring["fiscal_code"]
+                    remove_row.append(
+                        InlineKeyboardButton(
+                            f"🗑️ {fc[-4:]}", 
+                            callback_data=f"remove_monitor_{midx}"
+                        )
+                    )
+                    
+                    # 3 pulsanti per riga
+                    if len(remove_row) == 3:
+                        keyboard.append(remove_row)
+                        remove_row = []
+            
+            # Aggiungi ultima riga incompleta di rimozione
+            if remove_row:
+                keyboard.append(remove_row)
+            
+            # Aggiungi pulsante di verifica
+            keyboard.append([
+                InlineKeyboardButton("🔄 Verifica Ora", callback_data="check_reports_now")
+            ])
+            
+            await query.edit_message_text(
+                result_message,
+                #reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.error(f"Errore durante la verifica dei referti: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            await query.edit_message_text("⚠️ Si è verificato un errore durante la verifica. Riprova più tardi.")
+        
+        return ConversationHandler.END
+    else:
+        # Callback non riconosciuta, log e ignora
+        logger.warning(f"Ricevuta callback non riconosciuta: {callback_data}")
+        return ConversationHandler.END
+            
+# Aggiungere una funzione alternativa per scaricare referti esistenti
+async def download_existing_reports(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Avvia il processo di download dei referti già monitorati."""
+    # Questa funzione mantiene la vecchia logica di download immediato
+    user_id = update.effective_user.id
+    
+    # Controlliamo se l'utente è autorizzato
+    if str(user_id) not in authorized_users:
+        await update.message.reply_text("🔒 Non sei autorizzato ad utilizzare questa funzione.")
+        return
+    
+    # Importa le funzioni necessarie
+    from modules.reports_monitor import load_reports_monitoring
+    
+    # Carica i dati di monitoraggio
+    monitoring_data = load_reports_monitoring()
+    
+    # Filtra i monitoraggi dell'utente (o tutti se è admin)
+    is_admin_user = is_admin(user_id, authorized_users)
+    
+    if is_admin_user:
+        # L'admin vede tutti i monitoraggi
+        user_monitoring = monitoring_data
+    else:
+        # Gli utenti normali vedono solo i propri
+        user_monitoring = [m for m in monitoring_data if m.get("telegram_chat_id") == user_id]
+    
+    if not user_monitoring:
+        # Se non ci sono monitoraggi, mostra un messaggio
+        await update.message.reply_text(
+            "⚠️ Non hai monitoraggi referti configurati.\n\n"
+            "Usa prima '📊 Configura Monitoraggio Referti' per configurare l'accesso."
+        )
+        return
+    
+    # Crea una tastiera con le opzioni di monitoraggio
+    keyboard = []
+    for idx, monitoring in enumerate(user_monitoring):
+        fiscal_code = monitoring["fiscal_code"]
+        keyboard.append([
+            InlineKeyboardButton(f"📊 {fiscal_code}", callback_data=f"download_reports_{idx}")
+        ])
+    
+    keyboard.append([InlineKeyboardButton("❌ Annulla", callback_data="cancel_download_reports")])
+    
+    await update.message.reply_text(
+        "Seleziona il monitoraggio per cui vuoi scaricare i referti:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    
+    return WAITING_FOR_REPORT_CHOICE
+
+async def handle_report_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gestisce la selezione del referto da scaricare."""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    callback_data = query.data
+    
+    if callback_data == "cancel_report":
+        await query.edit_message_text("❌ Operazione annullata.")
+        # Puliamo i dati dell'utente
+        user_data.pop(user_id, None)
+        return ConversationHandler.END
+    
+    # Otteniamo le informazioni necessarie
+    fiscal_code = user_data[user_id]["fiscal_code"]
+    password = user_data[user_id]["password"]
+    tscns = user_data[user_id]["tscns"]
+    reports = user_data[user_id]["reports"]
+    
+    # Inviamo un messaggio di attesa
+    await query.edit_message_text("📥 Download in corso... Attendere prego.")
+    
+    # Importa le funzioni per il monitoraggio
+    from modules.reports_monitor import load_reports_monitoring, save_reports_monitoring
+    
+    # Carica i dati di monitoraggio
+    monitoring_data = load_reports_monitoring()
+    
+    # Trova il monitoraggio corrispondente
+    monitoring_item = None
+    monitoring_index = -1
+    for i, item in enumerate(monitoring_data):
+        if item["fiscal_code"] == fiscal_code:
+            monitoring_item = item
+            monitoring_index = i
+            break
+    
+    if callback_data == "report_all":
+        # Scarica tutti i referti
+        await query.edit_message_text("📥 Download in corso di tutti i referti... Attendere prego.")
+        
+        # Import necessari
+        from modules.reports_client import download_report_document
+        from io import BytesIO
+        
+        # Contatori per il risultato
+        success_count = 0
+        error_count = 0
+        
+        # Lista di ID scaricati con successo
+        downloaded_ids = []
+        
+        # Inviamo i file all'utente
+        for report in reports:
+            try:
+                document_id = report.get("document_id")
+                if not document_id:
+                    continue
+                    
+                # Scarica il documento
+                document_content = download_report_document(document_id, fiscal_code, password, tscns)
+                
+                if not document_content:
+                    error_count += 1
+                    continue
+                
+                # Estrai informazioni
+                provider = report.get("provider", "Struttura sconosciuta")
+                doc_type = report.get("document_type", "Referto")
+                doc_date = report.get("document_date", "Data sconosciuta")
+                
+                # Formattare la data se possibile
+                try:
+                    date_obj = datetime.strptime(doc_date, "%Y%m%d")
+                    formatted_date = date_obj.strftime("%d/%m/%Y")
+                except:
+                    formatted_date = doc_date
+                
+                # Crea un nome file
+                filename = f"{doc_date}_{doc_type}_{provider}_{document_id}.pdf"
+                filename = ''.join(c if c.isalnum() or c == '.' or c == '_' else '_' for c in filename)
+                
+                # Inviamo il file
+                await context.bot.send_document(
+                    chat_id=user_id,
+                    document=BytesIO(document_content),
+                    filename=filename,
+                    caption=f"📋 {doc_type}\n📅 {formatted_date}\n🏥 {provider}"
+                )
+                
+                success_count += 1
+                downloaded_ids.append(document_id)
+            except Exception as e:
+                logger.error(f"Errore nell'invio del documento Telegram: {str(e)}")
+                error_count += 1
+        
+        # Se abbiamo trovato il monitoraggio, disattiviamolo o aggiorniamo la lista dei referti noti
+        if monitoring_item:
+            # Rimuoviamo il monitoraggio
+            monitoring_data.pop(monitoring_index)
+            save_reports_monitoring(monitoring_data)
+            
+            await query.message.reply_text(
+                f"✅ Download completato!\n\n"
+                f"Referti scaricati con successo: {success_count}\n"
+                f"Errori: {error_count}\n\n"
+                f"Il monitoraggio referti per questo codice fiscale è stato rimosso."
+            )
+        else:
+            await query.message.reply_text(
+                f"✅ Download completato!\n\n"
+                f"Referti scaricati con successo: {success_count}\n"
+                f"Errori: {error_count}"
+            )
+        
+    else:
+        # Scarica un singolo referto
+        idx = int(callback_data.split("_")[1])
+        
+        # Import necessari
+        from modules.reports_client import download_report_document
+        from io import BytesIO
+        
+        # Controlliamo che l'indice sia valido
+        if idx < 0 or idx >= len(reports):
+            await query.edit_message_text("⚠️ Referto non valido.")
+            user_data.pop(user_id, None)
+            return ConversationHandler.END
+        
+        # Otteniamo il referto
+        report = reports[idx]
+        document_id = report.get("document_id")
+        
+        if not document_id:
+            await query.edit_message_text("⚠️ ID documento non valido.")
+            user_data.pop(user_id, None)
+            return ConversationHandler.END
+        
+        # Scarica il documento
+        document_content = download_report_document(document_id, fiscal_code, password, tscns)
+        
+        if not document_content:
+            await query.edit_message_text("❌ Errore nel download del referto.")
+            # Puliamo i dati dell'utente
+            user_data.pop(user_id, None)
+            return ConversationHandler.END
+        
+        # Estrai informazioni
+        provider = report.get("provider", "Struttura sconosciuta")
+        doc_type = report.get("document_type", "Referto")
+        doc_date = report.get("document_date", "Data sconosciuta")
+        
+        # Formattare la data se possibile
+        try:
+            date_obj = datetime.strptime(doc_date, "%Y%m%d")
+            formatted_date = date_obj.strftime("%d/%m/%Y")
+        except:
+            formatted_date = doc_date
+        
+        # Crea un nome file
+        filename = f"{doc_date}_{doc_type}_{provider}_{document_id}.pdf"
+        filename = ''.join(c if c.isalnum() or c == '.' or c == '_' else '_' for c in filename)
+        
+        # Inviamo il file
+        await query.message.reply_document(
+            document=BytesIO(document_content),
+            filename=filename,
+            caption=f"📋 {doc_type}\n📅 {formatted_date}\n🏥 {provider}"
+        )
+        
+        # Se abbiamo trovato il monitoraggio, rimuoviamolo
+        if monitoring_item:
+            # Rimuoviamo il monitoraggio se c'è solo questo referto
+            if len(reports) == 1:
+                monitoring_data.pop(monitoring_index)
+                save_reports_monitoring(monitoring_data)
+                await query.message.reply_text(
+                    "✅ Referto scaricato con successo!\n"
+                    "Il monitoraggio referti per questo codice fiscale è stato rimosso."
+                )
+            else:
+                # Se ci sono più referti, rimuoviamo solo questo dalla lista dei monitorati
+                await query.message.reply_text(
+                    "✅ Referto scaricato con successo!\n"
+                    "Ci sono ancora altri referti disponibili. Il monitoraggio continuerà per gli altri."
+                )
+        else:
+            await query.message.reply_text("✅ Referto scaricato con successo!")
+    
+    # Puliamo i dati dell'utente
+    user_data.pop(user_id, None)
+    
+    return ConversationHandler.END
+
+async def handle_download_reports_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gestisce la selezione del monitoraggio per cui scaricare i referti."""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    callback_data = query.data
+    
+    if callback_data == "cancel_download_reports":
+        await query.edit_message_text("❌ Operazione annullata.")
+        return ConversationHandler.END
+    
+    # Importa le funzioni necessarie
+    from modules.reports_monitor import load_reports_monitoring
+    from modules.reports_client import download_reports
+    
+    # Carica i dati di monitoraggio
+    monitoring_data = load_reports_monitoring()
+    
+    # Filtra i monitoraggi dell'utente (o tutti se è admin)
+    is_admin_user = is_admin(user_id, authorized_users)
+    
+    if is_admin_user:
+        # L'admin vede tutti i monitoraggi
+        user_monitoring = monitoring_data
+    else:
+        # Gli utenti normali vedono solo i propri
+        user_monitoring = [m for m in monitoring_data if m.get("telegram_chat_id") == user_id]
+    
+    # Estrai l'indice
+    idx = int(callback_data.split("_")[-1])
+    
+    if idx < 0 or idx >= len(user_monitoring):
+        await query.edit_message_text("⚠️ Selezione non valida.")
+        return ConversationHandler.END
+    
+    # Ottieni le informazioni del monitoraggio
+    monitoring = user_monitoring[idx]
+    fiscal_code = monitoring["fiscal_code"]
+    password = monitoring["password"]
+    tscns = monitoring["tscns"]
+    
+    # Invia un messaggio di attesa
+    await query.edit_message_text("🔍 Recupero dei referti in corso... Attendere prego.")
+    
+    # Scarica i referti
+    reports = download_reports(fiscal_code, password, tscns)
+    
+    if not reports or len(reports) == 0:
+        await query.edit_message_text(
+            "ℹ️ Non ci sono referti disponibili per questo monitoraggio."
+        )
+        return ConversationHandler.END
+    
+    # Salva i referti nell'utente per il download successivo
+    user_data[user_id] = {
+        "action": "download_reports",
+        "fiscal_code": fiscal_code,
+        "password": password,
+        "tscns": tscns,
+        "reports": reports
+    }
+    
+    # Creiamo i pulsanti per i referti
+    keyboard = []
+    
+    for idx, report in enumerate(reports):
+        # Estrai informazioni
+        provider = report.get("provider", "Struttura sconosciuta")
+        doc_type = report.get("document_type", "Referto")
+        doc_date = report.get("document_date", "Data sconosciuta")
+        
+        # Crea una descrizione breve ma informativa
+        short_desc = f"{doc_type} - {provider} ({doc_date})"
+        
+        keyboard.append([
+            InlineKeyboardButton(
+                f"{idx+1}. {short_desc[:50]}...",
+                callback_data=f"report_{idx}"
+            )
+        ])
+    
+    # Aggiungiamo un pulsante per scaricare tutti i referti
+    keyboard.append([InlineKeyboardButton("📥 Scarica tutti", callback_data="report_all")])
+    
+    # Aggiungiamo un pulsante per annullare
+    keyboard.append([InlineKeyboardButton("❌ Annulla", callback_data="cancel_report")])
+    
+    # Aggiorniamo il messaggio con la lista dei referti
+    await query.edit_message_text(
+        f"📋 <b>Referti disponibili ({len(reports)}):</b>\n\n"
+        "Seleziona un referto da scaricare:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML"
+    )
+    
+    return WAITING_FOR_REPORT_CHOICE
+    
 # =============================================================================
 # GESTORI COMANDI BOT
 # =============================================================================
@@ -90,12 +1009,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.warning(f"Tentativo di accesso non autorizzato da {user_id}")
         return
     
+    # Verifichiamo se l'utente è admin
+    keyboard = ADMIN_KEYBOARD if is_admin(user_id, authorized_users) else MAIN_KEYBOARD
 
+    
     await update.message.reply_text(
         f"👋 Benvenuto, {update.effective_user.first_name}!\n\n"
         "Questo bot ti aiuterà a monitorare le disponibilità del Servizio Sanitario Nazionale.\n\n"
-        "Utilizza i pulsanti sotto per gestire le prescrizioni da monitorare.",
-        reply_markup=MAIN_KEYBOARD
+        "Utilizza i pulsanti sotto per gestire le prescrizioni da monitorare o per scaricare i tuoi referti.",
+        reply_markup=keyboard
     )
     
 # =============================================================================
@@ -141,17 +1063,24 @@ async def manage_hospital_blacklist(update: Update, context: ContextTypes.DEFAUL
         message += f"{idx+1}. <b>{desc}</b>\n"
         message += f"   CF: {fiscal_code} • {blacklist_status}\n\n"
     
-    # Creiamo pulsanti più semplici e compatti
+    # Creiamo pulsanti più compatti, 3 per riga
     keyboard = []
+    current_row = []
     
     for idx, _ in enumerate(user_prescriptions):
-        keyboard.append([
+        current_row.append(
             InlineKeyboardButton(
                 f"{idx+1}",  # Solo il numero
                 callback_data=f"blacklist_{idx}"
             )
-        ])
+        )
+        
+        # Quando abbiamo 4 pulsanti nella riga corrente, la aggiungiamo alla tastiera
+        if len(current_row) == 4 or idx == len(user_prescriptions) - 1:
+            keyboard.append(current_row)
+            current_row = []
     
+    # Aggiungiamo il pulsante Annulla
     keyboard.append([InlineKeyboardButton("❌ Annulla", callback_data="cancel_blacklist")])
     
     # Salviamo le prescrizioni nei dati dell'utente
@@ -200,25 +1129,9 @@ async def handle_prescription_blacklist(update: Update, context: ContextTypes.DE
     
     # Carichiamo il database delle location
     location_db = {}
-    locations_file = "../locations.json"  # Vai indietro di una directory
-
-    logger.info(f"Tentativo di caricare il file locations: {locations_file}")
-    
     try:
-        if os.path.exists(locations_file):
-            with open(locations_file, "r") as f:
-                location_db = json.load(f)
-                logger.info(f"File locations caricato con successo. Trovate {len(location_db)} location.")
-        else:
-            logger.warning(f"File locations non trovato: {locations_file}")
-            # Proviamo un percorso alternativo
-            alternative_path = "locations.json"  # Prova anche nella directory corrente
-            if os.path.exists(alternative_path):
-                with open(alternative_path, "r") as f:
-                    location_db = json.load(f)
-                    logger.info(f"File locations caricato dal percorso alternativo. Trovate {len(location_db)} location.")
-            else:
-                logger.warning(f"File locations non trovato neanche nel percorso alternativo")
+        location_db = load_locations_db()
+        logger.info(f"File locations caricato con successo. Trovate {len(location_db)} location.")
     except Exception as e:
         logger.error(f"Errore nel caricare il database delle location: {str(e)}")
     
@@ -300,7 +1213,7 @@ async def show_hospitals_page(query, user_id):
         status = "❌" if is_blacklisted else "✅"
         message_text += f"{i+1}. {status} {hospital}\n"
     
-    message_text += f"\nPagina {page+1}/{total_pages} • Ospedali esclusi: {len(current_blacklist)}"
+    message_text += f"\nPagina {page+1}/{total_pages} • Ospedali esclusi: {len(current_blacklist)}/{len(hospitals)}"
     
     # Crea i pulsanti compatti (solo numeri)
     keyboard = []
@@ -330,6 +1243,13 @@ async def show_hospitals_page(query, user_id):
     # Aggiungi l'ultima riga se c'è
     if current_row:
         keyboard.append(current_row)
+    
+    # Pulsanti per blacklistare/whitelistare tutti
+    blacklist_all_row = [
+        InlineKeyboardButton("⬛ Blacklista tutti", callback_data="blacklist_all"),
+        InlineKeyboardButton("⬜ Whitelist tutti", callback_data="whitelist_all")
+    ]
+    keyboard.append(blacklist_all_row)
     
     # Pulsanti di navigazione
     navigation = []
@@ -370,7 +1290,7 @@ async def show_hospitals_page(query, user_id):
             logger.error(f"Secondo errore nell'aggiornare il messaggio: {str(e2)}")
     
     return WAITING_FOR_HOSPITAL_SELECTION
-    
+
 async def handle_hospital_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Gestisce la selezione di un ospedale per aggiungerlo/rimuoverlo dalla blacklist."""
     query = update.callback_query
@@ -410,6 +1330,20 @@ async def handle_hospital_selection(update: Update, context: ContextTypes.DEFAUL
         user_data[user_id]["page"] = min(user_data[user_id]["page"] + 1, total_pages - 1)
         return await show_hospitals_page(query, user_id)
     
+    # Gestione blacklist/whitelist all
+    if callback_data == "blacklist_all":
+        # Blacklista tutti gli ospedali
+        hospitals = user_data[user_id]["hospitals"]
+        user_data[user_id]["current_blacklist"] = hospitals.copy()
+        await query.answer("Tutti gli ospedali sono stati aggiunti alla blacklist")
+        return await show_hospitals_page(query, user_id)  # Aggiornamento della pagina
+    
+    if callback_data == "whitelist_all":
+        # Svuota la blacklist (whitelist tutti)
+        user_data[user_id]["current_blacklist"] = []
+        await query.answer("Tutti gli ospedali sono stati rimossi dalla blacklist")
+        return await show_hospitals_page(query, user_id)  # Aggiornamento della pagina
+    
     # Estraiamo i dati dalla callback per toggle hospital
     if callback_data.startswith("toggle_hospital_"):
         parts = callback_data.split("_")
@@ -446,8 +1380,7 @@ async def handle_hospital_selection(update: Update, context: ContextTypes.DEFAUL
     
     # Se arriviamo qui, è una callback non gestita
     logger.warning(f"Callback non gestita: {callback_data}")
-    return WAITING_FOR_HOSPITAL_SELECTION
-    
+    return WAITING_FOR_HOSPITAL_SELECTION  
 
 async def confirm_hospital_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Conferma e salva la blacklist degli ospedali."""
@@ -539,10 +1472,11 @@ async def cancel_operation(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Cancellazione da un messaggio di testo
             user_id = update.effective_user.id
             # Ripristiniamo la tastiera principale
-            
+            keyboard = ADMIN_KEYBOARD if is_admin(user_id, authorized_users) else MAIN_KEYBOARD
+
             await update.message.reply_text(
                 "❌ Operazione annullata. Cosa vuoi fare?",
-                reply_markup=MAIN_KEYBOARD
+                reply_markup=keyboard
             )
         
         # Puliamo i dati dell'utente solo se abbiamo l'ID utente
@@ -798,12 +1732,13 @@ async def confirm_add_prescription(update: Update, context: ContextTypes.DEFAULT
         f"Riceverai notifiche quando saranno disponibili nuovi appuntamenti."
     )
     
+    keyboard = ADMIN_KEYBOARD if is_admin(user_id, authorized_users) else MAIN_KEYBOARD
 
     await context.bot.send_message(
         chat_id=user_id,
         text="💡 Suggerimento: puoi attivare la prenotazione automatica usando la funzione '🤖 Prenota Automaticamente' "
              "per prenotare automaticamente il primo slot disponibile.",
-        reply_markup=MAIN_KEYBOARD
+        reply_markup=keyboard
     )
     
     # Puliamo i dati dell'utente
@@ -973,6 +1908,10 @@ async def list_prescriptions(update: Update, context: ContextTypes.DEFAULT_TYPE)
         fiscal_code = prescription["fiscal_code"]
         nre = prescription["nre"]
         
+        # Verifica se la prescrizione ha prenotazioni
+        has_booking = bool(prescription.get("bookings"))
+        booking_status = "📑 Prenotata" if has_booking else "🔍 In monitoraggio"
+        
         # Mostriamo lo stato delle notifiche
         notifications_enabled = prescription.get("notifications_enabled", True)
         notification_status = "🔔 attive" if notifications_enabled else "🔕 disattivate"
@@ -984,6 +1923,10 @@ async def list_prescriptions(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # Mostriamo il limite di mesi se impostato
         months_limit = prescription.get("config", {}).get("months_limit")
         date_filter = f"⏱ entro {months_limit} mesi" if months_limit else "⏱ nessun filtro date"
+        
+        # Mostriamo il numero di ospedali in blacklist
+        hospitals_blacklist = prescription.get("config", {}).get("hospitals_blacklist", [])
+        blacklist_status = f"🚫 {len(hospitals_blacklist)} ospedali esclusi" if hospitals_blacklist else "🚫 nessun ospedale escluso"
         
         # Otteniamo il codice della tessera sanitaria se disponibile
         team_card_code = ""
@@ -1002,6 +1945,7 @@ async def list_prescriptions(update: Update, context: ContextTypes.DEFAULT_TYPE)
             user_info = f" (User ID: {prescription['telegram_chat_id']})"
         
         message += f"{idx+1}. <b>{desc}</b>{user_info}\n"
+        message += f"   Stato: {booking_status}\n"
         message += f"   Codice Fiscale: <code>{fiscal_code}</code>\n"
         message += f"   NRE: <code>{nre}</code>\n"
         
@@ -1010,8 +1954,28 @@ async def list_prescriptions(update: Update, context: ContextTypes.DEFAULT_TYPE)
             message += f"   Tessera Sanitaria: <code>{team_card_code}</code>\n"
             
         message += contact_info
-        message += f"   Notifiche: {notification_status} | {date_filter}\n"
-        message += f"   Prenotazione automatica: {auto_book_status}\n\n"
+        
+        # Mostra informazioni sulla blacklist
+        message += f"   {blacklist_status}\n"
+        
+        # Mostra altre informazioni solo se non è prenotata
+        if not has_booking:
+            message += f"   Notifiche: {notification_status} | {date_filter}\n"
+            message += f"   Prenotazione automatica: {auto_book_status}\n"
+        
+        # Se ha prenotazioni, mostriamole
+        if has_booking:
+            for booking in prescription.get("bookings", []):
+                try:
+                    date_obj = datetime.strptime(booking["date"], "%Y-%m-%dT%H:%M:%SZ")
+                    formatted_date = date_obj.strftime("%d/%m/%Y %H:%M")
+                except:
+                    formatted_date = booking["date"]
+                
+                message += f"   🏥 Prenotato per: {formatted_date} presso {booking['hospital']}\n"
+                message += f"   🆔 ID Prenotazione: {booking['booking_id']}\n"
+        
+        message += "\n"
     
     await update.message.reply_text(message, parse_mode="HTML")
     
@@ -1333,23 +2297,47 @@ async def handle_booking_choice(update: Update, context: ContextTypes.DEFAULT_TY
             await waiting_message.edit_text("⚠️ Nessuna disponibilità trovata per questa prescrizione.")
             return ConversationHandler.END
 
-        # Costruiamo i pulsanti per gli slot disponibili
-        keyboard = []
-        from datetime import datetime
-        for slot in slots:
+        # Costruiamo un messaggio dettagliato con le informazioni complete
+        message_text = f"📋 <b>Disponibilità per {result.get('service', 'Prestazione')}</b>\n\n"
+        message_text += "Seleziona un numero per prenotare lo slot corrispondente:\n\n"
+        
+        # Aggiungiamo le disponibilità al messaggio
+        for i, slot in enumerate(slots):
             try:
                 date_obj = datetime.strptime(slot["date"], "%Y-%m-%dT%H:%M:%SZ")
                 formatted_date = date_obj.strftime("%d/%m/%Y %H:%M")
             except Exception:
                 formatted_date = slot["date"]
-            keyboard.append([InlineKeyboardButton(
-                f"{formatted_date} - {slot['hospital']} ({slot['price']}€)",
-                callback_data=f"slot_{slot['index']}"
-            )])
+                
+            message_text += f"{i+1}. <b>{formatted_date}</b>\n"
+            message_text += f"   🏥 {slot['hospital']}\n"
+            message_text += f"   📍 {slot['address']}\n"
+            message_text += f"   💰 {slot['price']}€\n\n"
+        
+        # Costruiamo i pulsanti compatti (solo numeri)
+        keyboard = []
+        current_row = []
+        
+        for i in range(len(slots)):
+            current_row.append(InlineKeyboardButton(
+                f"{i+1}",  # Solo il numero
+                callback_data=f"slot_{i}"
+            ))
+            
+            # 5 pulsanti per riga
+            if len(current_row) == 5:
+                keyboard.append(current_row)
+                current_row = []
+        
+        # Aggiungiamo l'ultima riga se c'è
+        if current_row:
+            keyboard.append(current_row)
+        
+        # Pulsante per annullare
         keyboard.append([InlineKeyboardButton("❌ Annulla", callback_data="cancel_slot")])
         
         await waiting_message.edit_text(
-            "📋 <b>Disponibilità trovate:</b>\nSeleziona lo slot desiderato:",
+            message_text,
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML"
         )
@@ -1357,7 +2345,6 @@ async def handle_booking_choice(update: Update, context: ContextTypes.DEFAULT_TY
     else:
         await waiting_message.edit_text("⚠️ Errore nella ricerca delle disponibilità. Riprova.")
         return ConversationHandler.END
-
        
 async def handle_phone_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Gestisce l'input del numero di telefono."""
@@ -1444,26 +2431,43 @@ async def handle_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_data.pop(user_id, None)
             return ConversationHandler.END
         
-        # Creiamo i pulsanti per le disponibilità
-        keyboard = []
+        # Costruiamo un messaggio dettagliato con le informazioni complete
+        message_text = f"📋 <b>Disponibilità per {service_name}</b>\n\n"
+        message_text += "Seleziona un numero per prenotare lo slot corrispondente:\n\n"
         
-        for slot in slots:
-            # Formattiamo la data
+        # Aggiungiamo le disponibilità al messaggio
+        for i, slot in enumerate(slots):
             try:
                 date_obj = datetime.strptime(slot["date"], "%Y-%m-%dT%H:%M:%SZ")
                 formatted_date = date_obj.strftime("%d/%m/%Y %H:%M")
-            except:
+            except Exception:
                 formatted_date = slot["date"]
-            
-            # Creiamo un pulsante per ogni disponibilità
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"{formatted_date} - {slot['hospital']} ({slot['price']}€)",
-                    callback_data=f"slot_{slot['index']}"
-                )
-            ])
+                
+            message_text += f"{i+1}. <b>{formatted_date}</b>\n"
+            message_text += f"   🏥 {slot['hospital']}\n"
+            message_text += f"   📍 {slot['address']}\n"
+            message_text += f"   💰 {slot['price']}€\n\n"
         
-        # Aggiungiamo un pulsante per annullare
+        # Costruiamo i pulsanti compatti (solo numeri)
+        keyboard = []
+        current_row = []
+        
+        for i in range(len(slots)):
+            current_row.append(InlineKeyboardButton(
+                f"{i+1}",  # Solo il numero
+                callback_data=f"slot_{i}"
+            ))
+            
+            # 5 pulsanti per riga
+            if len(current_row) == 5:
+                keyboard.append(current_row)
+                current_row = []
+        
+        # Aggiungiamo l'ultima riga se c'è
+        if current_row:
+            keyboard.append(current_row)
+        
+        # Pulsante per annullare
         keyboard.append([InlineKeyboardButton("❌ Annulla", callback_data="cancel_slot")])
         
         # Eliminiamo il messaggio di caricamento
@@ -1471,8 +2475,7 @@ async def handle_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Mostriamo le disponibilità
         await update.message.reply_text(
-            f"📋 <b>Disponibilità per {service_name}</b>\n\n"
-            f"Seleziona una disponibilità:",
+            message_text,
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML"
         )
@@ -1487,7 +2490,7 @@ async def handle_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Puliamo i dati dell'utente
     user_data.pop(user_id, None)
     return ConversationHandler.END
-
+    
 async def handle_slot_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Gestisce la selezione della disponibilità."""
     query = update.callback_query
@@ -2419,8 +3422,8 @@ async def handle_auto_book_toggle(update: Update, context: ContextTypes.DEFAULT_
         # Testo aggiuntivo per spiegare la funzionalità
         info_text = (
             "Il bot controllerà automaticamente le disponibilità ogni 5 minuti e "
-            "prenoterà il primo slot disponibile senza richiedere conferma."
-            if new_state else ""
+            f"prenoterà il primo slot disponibile negli ospedali non blacklistati senza richiedere conferma.\n\n"
+            f"I documenti PDF delle prenotazioni saranno salvati nella cartella '{PDF_FOLDER}'."
         )
         
         # Aggiorniamo il messaggio
@@ -2555,7 +3558,7 @@ async def show_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         "ℹ️ <b>Informazioni sul Bot</b>\n\n"
-        "Questo bot monitora le disponibilità del Servizio Sanitario Nazionale (SSN) per le prescrizioni mediche e ti notifica quando ci sono nuove disponibilità.\n\n"
+        "Questo bot monitora le disponibilità del Servizio Sanitario Nazionale (SSN) per le prescrizioni mediche e ti notifica quando ci sono nuove disponibilità. Inoltre, ora monitora anche i tuoi referti medici e ti avvisa quando sono disponibili.\n\n"
         "<b>Comandi principali:</b>\n"
         "➕ <b>Aggiungi Prescrizione</b> - Monitora una nuova prescrizione\n"
         "➖ <b>Rimuovi Prescrizione</b> - Smetti di monitorare una prescrizione\n"
@@ -2566,7 +3569,12 @@ async def show_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🚫 <b>Blacklist Ospedali</b> - Escludi ospedali specifici dalle notifiche\n"
         "🏥 <b>Prenota</b> - Prenota un appuntamento per una prescrizione\n"
         "🤖 <b>Prenota Automaticamente</b> - Attiva/disattiva la prenotazione automatica\n"
-        "📝 <b>Le mie Prenotazioni</b> - Visualizza e gestisci le prenotazioni attive\n\n"
+        "📝 <b>Le mie Prenotazioni</b> - Visualizza e gestisci le prenotazioni attive\n"
+        "📊 <b>Configura Monitoraggio Referti</b> - Configura il monitoraggio automatico dei referti\n"
+        "📋 <b>Gestisci Monitoraggi Referti</b> - Visualizza, scarica o disattiva monitoraggi referti\n\n"
+        "<b>Monitoraggio Referti:</b>\n"
+        "Il sistema verifica automaticamente ogni 5 minuti se sono disponibili nuovi referti medici per il tuo codice fiscale. Quando un referto diventa disponibile, riceverai immediatamente una notifica. Una volta scaricato il referto, il monitoraggio verrà automaticamente disattivato. "
+        "Se nelle tue prescrizioni monitorate è presente il codice della tessera sanitaria, verrà utilizzato automaticamente.\n\n"
         "<b>Prenotazione Automatica:</b>\n"
         "Quando attivi la prenotazione automatica per una prescrizione, il bot prenota automaticamente il primo slot disponibile utilizzando i dati di contatto salvati, senza richiedere ulteriori conferme.\n\n"
         "<b>Blacklist Ospedali:</b>\n"
@@ -2578,7 +3586,148 @@ async def show_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Per problemi o assistenza, contatta l'amministratore",
         parse_mode="HTML"
     )
- 
+    
+async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gestisce l'invio di un messaggio a tutti gli utenti autorizzati (solo admin)."""
+    user_id = update.effective_user.id
+    
+    # Verifica che l'utente sia l'amministratore (primo utente nella lista)
+    if not authorized_users or str(user_id) != authorized_users[0]:
+        await update.message.reply_text("🔒 Solo l'amministratore può inviare messaggi broadcast.")
+        return ConversationHandler.END
+    
+    # Tastiera con pulsante Annulla
+    cancel_keyboard = ReplyKeyboardMarkup([["❌ Annulla"]], resize_keyboard=True)
+    
+    await update.message.reply_text(
+        "📣 <b>Broadcast Message</b>\n\n"
+        "Scrivi il messaggio che vuoi inviare a tutti gli utenti autorizzati.\n"
+        "Il messaggio supporta la formattazione HTML.\n\n"
+        "Esempi di formattazione:\n"
+        "- Per il <b>grassetto</b> usa: &lt;b&gt;grassetto&lt;/b&gt;\n"
+        "- Per il <i>corsivo</i> usa: &lt;i&gt;corsivo&lt;/i&gt;\n"
+        "- Per il <u>sottolineato</u> usa: &lt;u&gt;sottolineato&lt;/u&gt;\n"
+        "- Per il <code>codice</code> usa: &lt;code&gt;codice&lt;/code&gt;\n\n"
+        "Scrivi il tuo messaggio o premi ❌ Annulla per tornare al menu principale:",
+        reply_markup=cancel_keyboard,
+        parse_mode="HTML"
+    )
+    
+    # Inizializziamo i dati dell'utente
+    user_data[user_id] = {"action": "broadcast_message"}
+    
+    return WAITING_FOR_BROADCAST_MESSAGE
+
+async def handle_broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gestisce il messaggio broadcast da inviare."""
+    user_id = update.effective_user.id
+    message_text = update.message.text
+    
+    # Controlliamo se l'utente vuole annullare
+    if message_text == "❌ Annulla" or message_text.lower() == "/cancel":
+        return await cancel_operation(update, context)
+    
+    # Verifica che l'utente sia l'amministratore
+    if not authorized_users or str(user_id) != authorized_users[0]:
+        await update.message.reply_text("🔒 Solo l'amministratore può inviare messaggi broadcast.")
+        if user_id in user_data:
+            user_data.pop(user_id, None)
+        return ConversationHandler.END
+    
+    # Chiedi conferma prima di inviare
+    confirm_keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Sì, invia a tutti", callback_data="confirm_broadcast"),
+            InlineKeyboardButton("❌ No, annulla", callback_data="cancel_broadcast")
+        ]
+    ])
+    
+    # Salviamo il messaggio
+    user_data[user_id]["broadcast_message"] = message_text
+    
+    # Mostra anteprima
+    await update.message.reply_text(
+        "📋 <b>Anteprima del messaggio:</b>\n\n" + message_text + "\n\n"
+        f"👥 Questo messaggio verrà inviato a {len(authorized_users)} utenti autorizzati.\n\n"
+        "Confermi l'invio?",
+        reply_markup=confirm_keyboard,
+        parse_mode="HTML"
+    )
+    
+    return WAITING_FOR_BROADCAST_CONFIRMATION
+
+async def confirm_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gestisce la conferma dell'invio del messaggio broadcast."""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    callback_data = query.data
+    
+    if callback_data == "cancel_broadcast":
+        await query.edit_message_text("❌ Operazione annullata.")
+        # Puliamo i dati dell'utente
+        user_data.pop(user_id, None)
+        return ConversationHandler.END
+    
+    # Otteniamo il messaggio
+    broadcast_message = user_data[user_id]["broadcast_message"]
+    
+    # Inviamo un messaggio di attesa
+    await query.edit_message_text("📣 Invio del messaggio broadcast in corso...")
+    
+    # Contatori per il feedback
+    success_count = 0
+    error_count = 0
+    error_details = []
+    
+    # Inviamo il messaggio a tutti gli utenti autorizzati
+    for recipient_id in authorized_users:
+        try:
+            # Skip dell'admin stesso se non vuole ricevere la copia
+            if recipient_id == str(user_id) and user_data[user_id].get("skip_self", False):
+                continue
+                
+            await context.bot.send_message(
+                chat_id=int(recipient_id),
+                text="📣 <b>Messaggio dall'amministratore:</b>\n\n" + broadcast_message,
+                parse_mode="HTML"
+            )
+            success_count += 1
+            
+            # Breve pausa per evitare limiti di rate
+            await asyncio.sleep(0.1)
+        except Exception as e:
+            error_count += 1
+            error_details.append(f"ID {recipient_id}: {str(e)}")
+            logger.error(f"Errore nell'invio del messaggio broadcast a {recipient_id}: {str(e)}")
+    
+    # Inviamo il feedback all'admin
+    result_message = f"✅ Messaggio inviato con successo a {success_count} utenti."
+    
+    if error_count > 0:
+        result_message += f"\n\n❌ Errori nell'invio a {error_count} utenti."
+        if error_details:
+            result_message += "\n\nDettagli degli errori:"
+            for detail in error_details[:5]:  # Limita i dettagli per evitare messaggi troppo lunghi
+                result_message += f"\n- {detail}"
+            if len(error_details) > 5:
+                result_message += f"\n...e altri {len(error_details) - 5} errori."
+    
+    # Ripristiniamo la tastiera principale
+    keyboard = ADMIN_KEYBOARD if is_admin(user_id, authorized_users) else MAIN_KEYBOARD
+    
+    await context.bot.send_message(
+        chat_id=user_id,
+        text=result_message,
+        reply_markup=keyboard
+    )
+    
+    # Puliamo i dati dell'utente
+    user_data.pop(user_id, None)
+    
+    return ConversationHandler.END
+
 async def authorize_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Gestisce l'autorizzazione di nuovi utenti."""
     user_id = update.effective_user.id
@@ -2671,12 +3820,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"Primo utente {user_id} aggiunto come amministratore")
             
             # Inviamo un messaggio di benvenuto come amministratore
+            keyboard = ADMIN_KEYBOARD if is_admin(user_id, authorized_users) else MAIN_KEYBOARD
 
             await update.message.reply_text(
                 f"👑 Benvenuto, {update.effective_user.first_name}!\n\n"
                 "Sei stato impostato come amministratore del bot.\n\n"
                 "Questo bot ti aiuterà a monitorare le disponibilità del Servizio Sanitario Nazionale.",
-                reply_markup=MAIN_KEYBOARD
+                reply_markup=keyboard
             )
             return
         else:
@@ -2708,13 +3858,21 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await show_info(update, context)
     elif text == "🚫 Blacklist Ospedali":
         return await manage_hospital_blacklist(update, context)
+    elif text == "📣 Messaggio Broadcast":
+        return await broadcast_message(update, context)
     elif text == "🔑 Autorizza Utente":
         return await authorize_user(update, context)
+    elif text == "📊 Configura Monitoraggio Referti":
+        return await download_medical_reports(update, context)
+    elif text == "📋 Gestisci Monitoraggi Referti":
+        return await list_report_monitoring(update, context)
     else:
+        keyboard = ADMIN_KEYBOARD if is_admin(user_id, authorized_users) else MAIN_KEYBOARD
+
         # Messaggio di default con la tastiera aggiornata
         await update.message.reply_text(
             "Usa i pulsanti sotto per interagire con il bot.",
-            reply_markup=MAIN_KEYBOARD
+            reply_markup=keyboard
         )
 
 async def error_handler(update, context):
@@ -2750,12 +3908,13 @@ async def error_handler(update, context):
     
     # Ripristina la tastiera principale se possibile
     if update and update.effective_chat and update.effective_user:
+        keyboard = ADMIN_KEYBOARD if is_admin(user_id, authorized_users) else MAIN_KEYBOARD
 
         try:
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
                 text="🔄 Sessione ripristinata. Seleziona un'operazione:",
-                reply_markup=MAIN_KEYBOARD
+                reply_markup=keyboard
             )
         except Exception as e:
             logger.error(f"Errore nel ripristino della tastiera: {e}")
@@ -2770,10 +3929,12 @@ async def error_recovery(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in user_data:
         user_data.pop(user_id, None)
     
+    keyboard = ADMIN_KEYBOARD if is_admin(user_id, authorized_users) else MAIN_KEYBOARD
+
     await update.message.reply_text(
         "⚠️ Si è verificato un problema con l'operazione corrente. "
         "Per favore, ricomincia o premi /cancel.",
-        reply_markup=MAIN_KEYBOARD
+        reply_markup=keyboard
     )
     
     return ConversationHandler.END
@@ -2867,7 +4028,40 @@ def setup_handlers(application):
             WAITING_FOR_HOSPITAL_SELECTION: [
                 CallbackQueryHandler(handle_hospital_selection, pattern="^toggle_hospital_"),
                 CallbackQueryHandler(handle_hospital_selection, pattern="^page_"),
+                CallbackQueryHandler(handle_hospital_selection, pattern="^blacklist_all$"), 
+                CallbackQueryHandler(handle_hospital_selection, pattern="^whitelist_all$"), 
                 CallbackQueryHandler(confirm_hospital_blacklist, pattern="^confirm_blacklist"),
+                CallbackQueryHandler(cancel_operation, pattern="^cancel_")
+            ],
+            WAITING_FOR_BROADCAST_MESSAGE: [
+                MessageHandler(filters.Regex("^❌ Annulla$"), cancel_operation),
+                CommandHandler("cancel", cancel_operation),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_broadcast_message)
+            ],
+            WAITING_FOR_BROADCAST_CONFIRMATION: [
+                CallbackQueryHandler(confirm_broadcast)
+            ],
+            WAITING_FOR_FISCAL_CODE_REPORT: [
+                MessageHandler(filters.Regex("^❌ Annulla$"), cancel_operation),
+                CommandHandler("cancel", cancel_operation),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_fiscal_code_report)
+            ],
+            WAITING_FOR_PASSWORD_REPORT: [
+                MessageHandler(filters.Regex("^❌ Annulla$"), cancel_operation),
+                CommandHandler("cancel", cancel_operation),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_password_report)
+            ],
+            WAITING_FOR_REPORT_CHOICE: [
+                CallbackQueryHandler(handle_report_choice, pattern="^report_"),
+                CallbackQueryHandler(handle_download_reports_selection, pattern="^download_reports_"),
+                CallbackQueryHandler(cancel_operation, pattern="^cancel_")
+            ],
+            
+            # Nuovo stato per gestire le azioni sui monitoraggi:
+            WAITING_FOR_REPORTS_MONITORING_ACTION: [
+                CallbackQueryHandler(handle_report_monitoring_action, pattern="^toggle_monitor_"),
+                CallbackQueryHandler(handle_report_monitoring_action, pattern="^remove_monitor_"),
+                CallbackQueryHandler(handle_report_monitoring_action, pattern="^check_reports_now"),
                 CallbackQueryHandler(cancel_operation, pattern="^cancel_")
             ],
         },
@@ -2881,7 +4075,6 @@ def setup_handlers(application):
     
     application.add_handler(CommandHandler("cancel", cancel_operation)) # handler globale per il /cancel
 
-    
     # Aggiungiamo i gestori
     application.add_handler(conv_handler)
     
@@ -2903,6 +4096,13 @@ def setup_handlers(application):
     )
     
     application.add_handler(booking_cancel_handler)
+    
+    # CORREZIONE IMPORTANTE: Utilizzo di un pattern più preciso per evitare errori di regex
+    reports_monitoring_handler = CallbackQueryHandler(
+        handle_report_monitoring_action, 
+        pattern="^(toggle_monitor_|remove_monitor_|check_reports_now)"
+    )
+    application.add_handler(reports_monitoring_handler)
     
     # Gestore errori
     application.add_error_handler(error_handler)

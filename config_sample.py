@@ -32,6 +32,7 @@ TELEGRAM_TOKEN = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
 # Percorso del file di input e dati precedenti
 PDF_FOLDER = "prenotazioni_pdf"
 REPORTS_FOLDER = "reports_pdf"
+REPORTS_MONITORING_FILE = "reports_monitoring.json"
 INPUT_FILE = "input_prescriptions.json"
 PREVIOUS_DATA_FILE = "previous_data.json"
 USERS_FILE = "authorized_users.json"
@@ -45,7 +46,8 @@ USERS_FILE = "authorized_users.json"
  WAITING_FOR_AUTO_BOOK_CHOICE, AUTHORIZING, WAITING_FOR_PRESCRIPTION_BLACKLIST, 
  WAITING_FOR_HOSPITAL_SELECTION, WAITING_FOR_BROADCAST_MESSAGE,
  WAITING_FOR_BROADCAST_CONFIRMATION, WAITING_FOR_FISCAL_CODE_REPORT, 
- WAITING_FOR_PASSWORD_REPORT, WAITING_FOR_REPORT_CHOICE) = range(23)
+ WAITING_FOR_PASSWORD_REPORT, WAITING_FOR_REPORT_CHOICE,
+ WAITING_FOR_REPORTS_MONITORING_ACTION) = range(24)  # Aggiornato a 25 stati
 
 # Lista di utenti autorizzati
 authorized_users = []
@@ -64,8 +66,8 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup([
     ["🔔 Gestisci Notifiche", "⏱ Imposta Filtro Date"],
     ["🏥 Prenota", "🤖 Prenota Automaticamente"],
     ["🚫 Blacklist Ospedali", "📝 Le mie Prenotazioni"],
-    ["📊 Scarica Referti", "ℹ️ Informazioni"],
-    ["🔑 Autorizza Utente"]
+    ["📊 Configura Monitoraggio Referti", "📋 Gestisci Monitoraggi Referti"],
+    ["ℹ️ Informazioni", "🔑 Autorizza Utente"]
 ], resize_keyboard=True)
 
 ADMIN_KEYBOARD = ReplyKeyboardMarkup([
@@ -74,6 +76,7 @@ ADMIN_KEYBOARD = ReplyKeyboardMarkup([
     ["🔔 Gestisci Notifiche", "⏱ Imposta Filtro Date"],
     ["🚫 Blacklist Ospedali", "🏥 Prenota"],
     ["🤖 Prenota Automaticamente", "📝 Le mie Prenotazioni"],
-    ["📊 Scarica Referti", "ℹ️ Informazioni"],
-    ["🔑 Autorizza Utente", "📣 Messaggio Broadcast"]
+    ["📊 Configura Monitoraggio Referti", "📋 Gestisci Monitoraggi Referti"] ,
+    ["🔑 Autorizza Utente", "ℹ️ Informazioni"],
+    ["📣 Messaggio Broadcast"]
 ], resize_keyboard=True)

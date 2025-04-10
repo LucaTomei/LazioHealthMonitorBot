@@ -10,6 +10,11 @@ import logging
 # Importiamo il logger dal modulo principale
 from recup_monitor import logger
 
+# Importiamo le variabili globali dal modulo principale
+from config import PDF_FOLDER
+import os
+from datetime import datetime
+
 # Disable SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -127,6 +132,8 @@ def get_booking_document(booking_id, output_path=None):
     """
     Retrieve the booking document (PDF) and save it locally.
     """
+    
+    
     url = f"{BASE_URL}/api/v3/process-apis/booking-management/bookings/{booking_id}/documents"
     
     headers = {
@@ -147,11 +154,15 @@ def get_booking_document(booking_id, output_path=None):
         logger.error(f"Response content: {response.text}")
         raise Exception(f"Failed to retrieve booking document with status code {response.status_code}")
     
-    # If we need to save the PDF
+    # Create PDF folder if it doesn't exist
+    os.makedirs(PDF_FOLDER, exist_ok=True)
+    
+    # If output_path is not specified, create a default path in the PDF folder
     if output_path is None:
         # Create a default filename with booking ID and timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = f"booking_{booking_id}_{timestamp}.pdf"
+        filename = f"booking_{booking_id}_{timestamp}.pdf"
+        output_path = os.path.join(PDF_FOLDER, filename)
     
     # Save the PDF to disk
     with open(output_path, 'wb') as f:
@@ -159,6 +170,7 @@ def get_booking_document(booking_id, output_path=None):
     
     logger.info(f"Booking document saved to: {output_path}")
     return output_path, response.content
+    
 
 def cancel_booking(booking_id):
     """
@@ -229,6 +241,7 @@ def booking_workflow(fiscal_code, nre, phone_number, email, patient_id=None, pro
         get_patient_info, get_doctor_info, check_prescription,
         get_prescription_details, get_availabilities
     )
+    from modules.data_utils import load_input_data
     
     try:
         # Step 1: Get patient information if not provided
@@ -274,8 +287,62 @@ def booking_workflow(fiscal_code, nre, phone_number, email, patient_id=None, pro
         if not availabilities['content']:
             return {"success": False, "message": "Nessuna disponibilità trovata per questa prescrizione"}
         
+        # NUOVO: Ottiene la blacklist degli ospedali
+        hospitals_blacklist = []
+        months_limit = None
+        # Importiamo la funzione per caricare i dati
+        from modules.data_utils import load_input_data
+        # Carichiamo le prescrizioni per trovare quella corrente
+        prescriptions = load_input_data()
+        for p in prescriptions:
+            if p["fiscal_code"] == fiscal_code and p["nre"] == nre:
+                if "config" in p:
+                    hospitals_blacklist = p.get("config", {}).get("hospitals_blacklist", [])
+                    months_limit = p.get("config", {}).get("months_limit")
+                    logger.info(f"Blacklist ospedali trovata: {hospitals_blacklist}")
+                    logger.info(f"Limite mesi impostato: {months_limit}")
+                break
+        
+        # NUOVO: Filtra gli slot disponibili escludendo gli ospedali in blacklist
+        available_slots = []
+        for slot in availabilities['content']:
+            hospital_name = slot.get('hospital', {}).get('name', '')
+            
+            # Verifica se l'ospedale è nella blacklist
+            if hospital_name in hospitals_blacklist:
+                logger.info(f"Escluso ospedale in blacklist: {hospital_name}")
+                continue
+                
+            # NUOVO: Applica il filtro delle date se impostato
+            if months_limit is not None:
+                from datetime import datetime, timedelta
+                
+                # Converte la data dello slot in un oggetto datetime
+                try:
+                    slot_date = datetime.strptime(slot['date'], "%Y-%m-%dT%H:%M:%SZ")
+                    
+                    # Calcola la data limite (oggi + X mesi)
+                    today = datetime.now()
+                    limit_date = today + timedelta(days=30 * months_limit)
+                    
+                    # Verifica che la data dello slot sia entro il limite
+                    if slot_date > limit_date:
+                        logger.info(f"Escluso slot per data oltre il limite: {slot['date']} > {limit_date}")
+                        continue
+                except Exception as e:
+                    logger.error(f"Errore nel filtraggio date: {str(e)}")
+            
+            # Se lo slot ha superato tutti i filtri, lo aggiungiamo
+            available_slots.append(slot)
+        
+        logger.info(f"Slot disponibili dopo filtraggio (blacklist+date): {len(available_slots)}/{len(availabilities['content'])}")
+        
+        # Se non ci sono slot disponibili dopo il filtraggio
+        if not available_slots:
+            return {"success": False, "message": "Nessuna disponibilità trovata dopo l'applicazione dei filtri (blacklist e date)"}
+        
         # Sort slots by date to prioritize earlier dates
-        sorted_slots = sorted(availabilities['content'], key=lambda x: x['date'])
+        sorted_slots = sorted(available_slots, key=lambda x: x['date'])
         
         # If slot_choice is out of range, use the first slot
         if slot_choice >= len(sorted_slots):
