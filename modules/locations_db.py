@@ -5,7 +5,7 @@ import requests
 import time
 
 # Imposta il percorso del file JSON che fungerà da "database" delle location
-LOCATIONS_DB_FILE = "locations_db.json"
+LOCATIONS_DB_FILE = "locations.json"
 
 logger = logging.getLogger("LocationsDB")
 

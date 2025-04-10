@@ -113,6 +113,7 @@ test-output/
 config.py
 authorized_users.json
 input_prescriptions.json
+locations.json
 previous_data.json
 *.log
 /prenotazioni_pdf/
@@ -120,3 +121,5 @@ previous_data.json
 merged_file.txt
 merge_files_code_ALL.bat
 prenotazioni_pdf
+reports_pdf
+reports_monitoring.json

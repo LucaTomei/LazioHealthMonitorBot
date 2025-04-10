@@ -13,7 +13,7 @@ from modules.data_utils import (
     is_similar_datetime, format_date
 )
 
-from modules.locations_db import update_location_db
+from modules.locations_db import update_location_db, load_locations_db, save_locations_db
 
 
 def compare_availabilities(previous, current, fiscal_code, nre, prescription_name="", cf_code="", config=None):
@@ -310,11 +310,16 @@ def compare_availabilities(previous, current, fiscal_code, nre, prescription_nam
     
     return None
 
+def is_prescription_already_booked(prescription):
+    """Verifica se una prescrizione ha già prenotazioni attive."""
+    return bool(prescription.get("bookings"))
+
 def process_prescription(prescription, previous_data, chat_id=None):
     """Process a single prescription and check for availability changes."""
     fiscal_code = prescription["fiscal_code"]
     nre = prescription["nre"]
     prescription_key = f"{fiscal_code}_{nre}"
+    
     
     # Otteniamo la configurazione specifica per questa prescrizione
     config = prescription.get("config", {})
@@ -323,6 +328,11 @@ def process_prescription(prescription, previous_data, chat_id=None):
     telegram_chat_id = prescription.get("telegram_chat_id", chat_id)
     
     logger.info(f"Elaborazione prescrizione {prescription_key}")
+    
+    # Verifica se la prescrizione è già prenotata, se sì, salta il monitoraggio
+    if is_prescription_already_booked(prescription):
+        logger.info(f"Prescrizione {prescription_key} già prenotata, monitoraggio saltato")
+        return True, prescription.get("description", "Prescrizione prenotata")
     
     # Step 1: Get access token
     access_token = get_access_token()
@@ -469,11 +479,13 @@ def process_prescription(prescription, previous_data, chat_id=None):
     current_availabilities = availabilities['content']
     
     # *** In questo punto aggiorniamo il database delle location ***
-    if os.path.exists("../locations.json"):
-        with open("../locations.json", "r") as f:
-            locations_db = json.load(f)
-    else:
-        locations_db = {}
+    locations_db = {}
+    try:
+        locations_db = load_locations_db()
+        logger.info(f"File locations caricato con successo. Trovate {len(locations_db)} location.")
+    except Exception as e:
+        logger.error(f"Errore nel caricare il database delle location: {str(e)}")
+        
         
     for slot in current_availabilities:
         hospital_info = slot.get("hospital", {})
@@ -482,9 +494,12 @@ def process_prescription(prescription, previous_data, chat_id=None):
         address = site_info.get("address", "Indirizzo non disponibile")
         update_location_db(hospital_name, address, locations_db)
     
-    # Salva le modifiche sul file JSON
-    with open("../locations.json", "w") as f:
-        json.dump(locations_db, f, indent=2)
+    try:
+        save_locations_db(locations_db)
+        logger.info(f"Database delle location salvato con successo con {len(locations_db)} location.")
+    except Exception as e:
+        logger.error(f"Errore nel salvare il database delle location: {str(e)}")
+    
     
     # Compare with previous data to detect changes
     previous_availabilities = previous_data.get(prescription_key, [])
@@ -544,10 +559,28 @@ def process_prescription(prescription, previous_data, chat_id=None):
                 if not any(booking.get("booking_id") for booking in prescription.get("bookings", [])):
                     logger.info(f"Tentativo di prenotazione automatica per {prescription_key}")
                     
+                    # Otteniamo la blacklist degli ospedali
+                    hospitals_blacklist = config.get("hospitals_blacklist", [])
+                    
+                    # Filtriamo le disponibilità escludendo gli ospedali in blacklist
+                    filtered_availabilities = []
+                    for avail in current_availabilities:
+                        hospital_name = avail['hospital']['name']
+                        if hospital_name not in hospitals_blacklist:
+                            filtered_availabilities.append(avail)
+                    
+                    # Ordiniamo per data (prima le date più vicine)
+                    filtered_availabilities = sorted(filtered_availabilities, key=lambda x: x['date'])
+                    
+                    # Verifichiamo se ci sono disponibilità dopo il filtraggio
+                    if not filtered_availabilities:
+                        logger.info(f"Nessuna disponibilità dopo il filtraggio per blacklist per {prescription_key}")
+                        return True, prescription_name
+                    
                     # Importiamo la funzione di prenotazione
                     from modules.booking_client import booking_workflow
                     
-                    # Avviamo il processo di prenotazione automatica
+                    # Avviamo il processo di prenotazione automatica con il primo slot disponibile (dopo filtraggio)
                     result = booking_workflow(
                         fiscal_code=fiscal_code,
                         nre=nre,
@@ -555,7 +588,7 @@ def process_prescription(prescription, previous_data, chat_id=None):
                         email=prescription["email"],
                         patient_id=patient_id,
                         process_id=process_id,
-                        slot_choice=0  # Il primo slot disponibile
+                        slot_choice=0  # Il primo slot disponibile (dopo il filtraggio)
                     )
                     
                     if result["success"] and result["action"] == "booked":
@@ -564,6 +597,7 @@ def process_prescription(prescription, previous_data, chat_id=None):
                         
                         # Formattare la data
                         try:
+                            from datetime import datetime
                             date_obj = datetime.strptime(result["appointment_date"], "%Y-%m-%dT%H:%M:%SZ")
                             formatted_date = date_obj.strftime("%d/%m/%Y %H:%M")
                         except:
@@ -571,16 +605,17 @@ def process_prescription(prescription, previous_data, chat_id=None):
                         
                         # Inviamo una notifica all'utente
                         booking_message = f"""
-<b>✅ Prenotazione Automatica Completata!</b>
-
-<b>Prescrizione:</b> {prescription_name}
-<b>Data:</b> {formatted_date}
-<b>Ospedale:</b> {result['hospital']}
-<b>Indirizzo:</b> {result['address']}
-<b>ID Prenotazione:</b> {result['booking_id']}
-
-La prenotazione è stata effettuata automaticamente. Controlla la tua email per conferma.
-"""
+    <b>✅ Prenotazione Automatica Completata!</b>
+    
+    <b>Prescrizione:</b> {prescription_name}
+    <b>Data:</b> {formatted_date}
+    <b>Ospedale:</b> {result['hospital']}
+    <b>Indirizzo:</b> {result['address']}
+    <b>ID Prenotazione:</b> {result['booking_id']}
+    <b>PDF salvato in:</b> {result['pdf_path']}
+    
+    La prenotazione è stata effettuata automaticamente. Controlla la tua email per conferma.
+    """
                         # Utilizziamo il metodo normale invece di quello asincrono per evitare problemi
                         import requests
                         
@@ -638,6 +673,9 @@ La prenotazione è stata effettuata automaticamente. Controlla la tua email per 
                         logger.error(f"Errore nella prenotazione automatica per {prescription_key}: {result.get('message', 'Errore sconosciuto')}")
             except Exception as e:
                 logger.error(f"Errore durante la prenotazione automatica: {str(e)}")
+                import traceback
+                logger.error(traceback.format_exc())
+                
     
     # Update previous data for next comparison
     previous_data[prescription_key] = current_availabilities
