@@ -1,0 +1,29 @@
+# Telegram Bot
+python-telegram-bot==20.7
+
+# HTTP Requests
+requests==2.31.0
+aiohttp==3.9.1
+
+# Data handling
+pydantic==2.5.3
+python-dateutil==2.8.2
+
+# Environment variables (CRITICAL!)
+python-dotenv==1.0.0
+
+# Logging
+colorlog==6.8.0
+
+# Async
+asyncio==3.4.3
+
+# Web scraping
+beautifulsoup4==4.12.2
+lxml==4.9.4
+
+# Database (uncomment if needed)
+# sqlalchemy==2.0.23
+# psycopg2-binary==2.9.9
+
+*backup

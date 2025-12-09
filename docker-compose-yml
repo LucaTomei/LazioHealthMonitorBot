@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  telegram-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: telegram-monitoring-bot
+    restart: unless-stopped
+    
+    # Environment variables
+    environment:
+      - TZ=Europe/Rome
+      - PYTHONUNBUFFERED=1
+      # Add your environment variables here
+      # - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      # - DATABASE_URL=${DATABASE_URL}
+    
+    # Volumes for persistent data
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./authorized_users.json:/app/authorized_users.json
+      - ./input_prescriptions.json:/app/input_prescriptions.json
+      - ./config.json:/app/config.json:ro
+      - ./reports_pdf:/app/reports_pdf
+      - ./debug_responses:/app/debug_responses
+    
+    # Network mode (use host for easier networking, or create custom network)
+    network_mode: bridge
+    
+    # Resource limits (adjust based on your needs)
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+# Optional: Define networks
+networks:
+  default:
+    name: telegram-bot-network
