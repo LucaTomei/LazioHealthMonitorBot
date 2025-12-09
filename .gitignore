@@ -90,10 +90,6 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 
-# Local dotenv
-.env
-.env.*
-
 # SQLite database
 *.sqlite3
 
