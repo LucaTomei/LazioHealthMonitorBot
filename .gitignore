@@ -110,7 +110,6 @@ test-output/
 
 
 .env
-config.py
 authorized_users.json
 input_prescriptions.json
 locations.json
