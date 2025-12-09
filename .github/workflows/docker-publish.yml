@@ -23,7 +23,7 @@ jobs:
       contents: read
       packages: write
       id-token: write
-      attestations: write  # ← AGGIUNTO!
+      attestations: write
 
     steps:
       - name: Checkout repository
@@ -51,7 +51,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
             type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,prefix={{branch}}-
+            type=sha,prefix=sha-
           labels: |
             org.opencontainers.image.title=Lazio Health Monitor Bot
             org.opencontainers.image.description=Telegram bot for monitoring health services in Lazio region
