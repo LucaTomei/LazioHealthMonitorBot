@@ -12,6 +12,14 @@ Guida completa per installare e configurare il bot utilizzando Docker. Include:
 - Risoluzione problemi comuni
 - Configurazioni avanzate
 
+### [Migrazione da Systemd a Docker](Migrazione-da-Systemd-a-Docker.md)
+Guida passo-passo per migrare da un'installazione systemd (Raspberry Pi) a Docker. Include:
+- Spiegazione del problema dei path relativi con systemd
+- Procedura completa di migrazione con backup
+- Comparazione comandi systemd vs Docker
+- Risoluzione problemi post-migrazione
+- Procedura di rollback se necessario
+
 ## 🌐 Come Usare questa Documentazione sulla Wiki di GitHub
 
 Questi file markdown sono progettati per essere copiati sulla Wiki di GitHub del progetto.
@@ -43,6 +51,7 @@ Aggiungi un link alla nuova pagina nella Home della Wiki:
 ## 📚 Documentazione
 
 - [Installazione Docker](Installazione-Docker) - Guida completa per installare il bot con Docker
+- [Migrazione da Systemd a Docker](Migrazione-da-Systemd-a-Docker) - Migrazione da systemd a Docker
 - [Guida Utente](USER_INSTALL_GUIDE) - Guida rapida per utenti
 ```
 

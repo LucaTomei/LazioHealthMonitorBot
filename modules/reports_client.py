@@ -5,8 +5,8 @@ import os
 from datetime import datetime
 from io import BytesIO
 
-# Importa il logger
-from config import logger
+# Importa il logger e le configurazioni
+from config import logger, REPORTS_FOLDER
 
 def get_access_token():
     """
@@ -175,7 +175,7 @@ def download_report_document(document_id, fiscal_number, password, tscns):
         logger.error(f"Exception occurred during document download: {str(e)}")
         return None
 
-def download_all_report_documents(fiscal_number, password, tscns, output_dir="reports_pdf"):
+def download_all_report_documents(fiscal_number, password, tscns, output_dir=None):
     """
     Download all reports and their documents for a patient
     
@@ -183,11 +183,15 @@ def download_all_report_documents(fiscal_number, password, tscns, output_dir="re
         fiscal_number (str): Fiscal code of the patient
         password (str): Password for access
         tscns (str): TSCNS code
-        output_dir (str): Directory to save downloaded files
+        output_dir (str): Directory to save downloaded files (defaults to REPORTS_FOLDER from config)
         
     Returns:
         dict: Summary of downloaded reports
     """
+    # Use REPORTS_FOLDER from config if output_dir is not specified
+    if output_dir is None:
+        output_dir = REPORTS_FOLDER
+
     # Create the output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
     
