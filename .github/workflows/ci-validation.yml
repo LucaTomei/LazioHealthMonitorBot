@@ -1,0 +1,252 @@
+name: CI Validation
+
+on:
+  push:
+    branches:
+      - '**'  # Run on all branches
+  pull_request:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+
+jobs:
+  # Job 1: Validate Python code
+  python-validation:
+    name: Validate Python Code
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Check Python syntax
+        run: |
+          echo "Checking Python syntax for all .py files..."
+          python -m py_compile recup_monitor.py config.py
+          find modules -name "*.py" -exec python -m py_compile {} \;
+          echo "✓ All Python files have valid syntax"
+
+      - name: Verify imports
+        env:
+          TELEGRAM_BOT_TOKEN: "test_token_for_ci"
+        run: |
+          echo "Verifying all imports..."
+          python -c "import config; print('✓ config.py imports OK')"
+          python -c "from modules import api_client; print('✓ api_client imports OK')"
+          python -c "from modules import booking_client; print('✓ booking_client imports OK')"
+          python -c "from modules import bot_handlers; print('✓ bot_handlers imports OK')"
+          python -c "from modules import data_utils; print('✓ data_utils imports OK')"
+          python -c "from modules import monitoring; print('✓ monitoring imports OK')"
+          python -c "from modules import reports_client; print('✓ reports_client imports OK')"
+          echo "✓ All imports successful"
+
+      - name: Check for common issues
+        run: |
+          echo "Checking for potential issues..."
+
+          # Check for hardcoded paths (should use config variables)
+          echo "Checking for hardcoded paths..."
+          ! grep -r "output_dir=\"reports_pdf\"" modules/ || (echo "ERROR: Hardcoded path found" && exit 1)
+          ! grep -r "output_dir=\"prenotazioni_pdf\"" modules/ || (echo "ERROR: Hardcoded path found" && exit 1)
+
+          echo "✓ No hardcoded paths found"
+
+  # Job 2: Validate Docker configuration
+  docker-validation:
+    name: Validate Docker Configuration
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Validate Dockerfile
+        run: |
+          echo "Validating Dockerfile..."
+          docker buildx build --platform linux/amd64 -t test-image:latest . --load
+          echo "✓ Dockerfile is valid"
+
+      - name: Test Docker image
+        run: |
+          echo "Testing Docker image..."
+          docker run --rm -e TELEGRAM_BOT_TOKEN="test_token_for_ci" test-image:latest python -c "import config; print('✓ Config imports OK in container')"
+          docker run --rm test-image:latest python -c "import sys; print(f'Python version: {sys.version}')"
+          docker run --rm test-image:latest ls -la /app
+          echo "✓ Docker image works correctly"
+
+      - name: Validate docker-compose files
+        run: |
+          # Create dummy .env file for docker-compose validation
+          echo "Creating dummy .env for validation..."
+          cat > .env << 'EOF'
+          TELEGRAM_BOT_TOKEN=test_token_for_ci
+          SERVER_NAME=ci-test
+          LOG_LEVEL=INFO
+          TZ=Europe/Rome
+          EOF
+
+          echo "Validating docker-compose-yml..."
+          docker compose -f docker-compose-yml config > /dev/null
+          echo "✓ docker-compose-yml is valid"
+
+          echo "Validating docker-compose.ghcr.yml..."
+          docker compose -f docker-compose.ghcr.yml config > /dev/null
+          echo "✓ docker-compose.ghcr.yml is valid"
+
+          # Clean up
+          rm .env
+
+      - name: Check volume mappings
+        run: |
+          echo "Checking volume mappings..."
+
+          # Check that all critical directories are mapped in docker-compose files
+          for file in docker-compose-yml docker-compose.ghcr.yml; do
+            echo "Checking $file..."
+            grep -q "logs:/app/logs" $file || (echo "ERROR: logs volume missing in $file" && exit 1)
+            grep -q "data:/app/data" $file || (echo "ERROR: data volume missing in $file" && exit 1)
+            grep -q "reports_pdf:/app/reports_pdf" $file || (echo "ERROR: reports_pdf volume missing in $file" && exit 1)
+            grep -q "prenotazioni_pdf:/app/prenotazioni_pdf" $file || (echo "ERROR: prenotazioni_pdf volume missing in $file" && exit 1)
+            echo "✓ All volumes present in $file"
+          done
+
+          echo "✓ All volume mappings are correct"
+
+  # Job 3: Validate project structure
+  structure-validation:
+    name: Validate Project Structure
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check required files exist
+        run: |
+          echo "Checking required files..."
+
+          # Core files
+          test -f "recup_monitor.py" || (echo "ERROR: recup_monitor.py missing" && exit 1)
+          test -f "config.py" || (echo "ERROR: config.py missing" && exit 1)
+          test -f "requirements.txt" || (echo "ERROR: requirements.txt missing" && exit 1)
+          test -f "Dockerfile" || (echo "ERROR: Dockerfile missing" && exit 1)
+
+          # Docker compose files
+          test -f "docker-compose-yml" || (echo "ERROR: docker-compose-yml missing" && exit 1)
+          test -f "docker-compose.ghcr.yml" || (echo "ERROR: docker-compose.ghcr.yml missing" && exit 1)
+
+          # Configuration samples
+          test -f ".env.example" || (echo "ERROR: .env.example missing" && exit 1)
+          test -f "authorized_users_sample.json" || (echo "ERROR: authorized_users_sample.json missing" && exit 1)
+          test -f "input_prescriptions_sample.json" || (echo "ERROR: input_prescriptions_sample.json missing" && exit 1)
+
+          # Documentation
+          test -f "README.md" || (echo "ERROR: README.md missing" && exit 1)
+          test -f "USER_INSTALL_GUIDE.md" || (echo "ERROR: USER_INSTALL_GUIDE.md missing" && exit 1)
+
+          # Modules
+          test -d "modules" || (echo "ERROR: modules directory missing" && exit 1)
+          test -f "modules/api_client.py" || (echo "ERROR: modules/api_client.py missing" && exit 1)
+          test -f "modules/booking_client.py" || (echo "ERROR: modules/booking_client.py missing" && exit 1)
+          test -f "modules/bot_handlers.py" || (echo "ERROR: modules/bot_handlers.py missing" && exit 1)
+
+          echo "✓ All required files present"
+
+      - name: Validate .env.example
+        run: |
+          echo "Validating .env.example..."
+
+          # Check that all required variables are documented
+          grep -q "TELEGRAM_BOT_TOKEN" .env.example || (echo "ERROR: TELEGRAM_BOT_TOKEN missing in .env.example" && exit 1)
+          grep -q "BASE_URL" .env.example || (echo "ERROR: BASE_URL missing in .env.example" && exit 1)
+          grep -q "LOG_LEVEL" .env.example || (echo "ERROR: LOG_LEVEL missing in .env.example" && exit 1)
+          grep -q "PDF_FOLDER" .env.example || (echo "ERROR: PDF_FOLDER missing in .env.example" && exit 1)
+          grep -q "REPORTS_FOLDER" .env.example || (echo "ERROR: REPORTS_FOLDER missing in .env.example" && exit 1)
+
+          echo "✓ .env.example is valid"
+
+      - name: Check .gitignore
+        run: |
+          echo "Checking .gitignore..."
+
+          # Verify sensitive files are ignored
+          grep -q ".env" .gitignore || (echo "ERROR: .env not in .gitignore" && exit 1)
+          grep -q "authorized_users.json" .gitignore || (echo "ERROR: authorized_users.json not in .gitignore" && exit 1)
+          grep -q "*.log" .gitignore || (echo "ERROR: *.log not in .gitignore" && exit 1)
+
+          # Verify data directories are ignored
+          grep -q "logs" .gitignore || (echo "ERROR: logs not in .gitignore" && exit 1)
+          grep -q "data" .gitignore || (echo "ERROR: data not in .gitignore" && exit 1)
+          grep -q "prenotazioni_pdf" .gitignore || (echo "ERROR: prenotazioni_pdf not in .gitignore" && exit 1)
+          grep -q "reports_pdf" .gitignore || (echo "ERROR: reports_pdf not in .gitignore" && exit 1)
+
+          echo "✓ .gitignore is correct"
+
+  # Job 4: Security checks
+  security-check:
+    name: Security Checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for secrets in code
+        run: |
+          echo "Checking for hardcoded secrets..."
+
+          # Check for potential hardcoded tokens (basic check)
+          # Exclude os.getenv, logger messages, and comments
+          ! grep -r "TELEGRAM_BOT_TOKEN.*=" --include="*.py" modules/ recup_monitor.py config.py | grep -v "os.getenv" | grep -v "logger\." | grep -v "#" || (echo "WARNING: Possible hardcoded token found" && exit 1)
+
+          # Check for hardcoded API keys (excluding logger and comments)
+          ! grep -ri "api[_-]key.*=.*['\"][a-zA-Z0-9]" --include="*.py" . | grep -v "logger\." | grep -v "#" || echo "WARNING: Possible hardcoded API key"
+
+          echo "✓ No obvious secrets found in code"
+
+      - name: Check file permissions in Dockerfile
+        run: |
+          echo "Checking Dockerfile security..."
+
+          # Verify non-root user is used
+          grep -q "USER botuser" Dockerfile || (echo "WARNING: Container might run as root" && exit 1)
+
+          # Verify healthcheck is present
+          grep -q "HEALTHCHECK" Dockerfile || (echo "WARNING: No healthcheck in Dockerfile" && exit 1)
+
+          echo "✓ Dockerfile follows security best practices"
+
+  # Summary job - runs only if all checks pass
+  all-checks-passed:
+    name: All Checks Passed ✓
+    runs-on: ubuntu-latest
+    needs: [python-validation, docker-validation, structure-validation, security-check]
+
+    steps:
+      - name: Success
+        run: |
+          echo "================================================"
+          echo "✓ All validation checks passed successfully!"
+          echo "================================================"
+          echo ""
+          echo "✓ Python code validation"
+          echo "✓ Docker configuration validation"
+          echo "✓ Project structure validation"
+          echo "✓ Security checks"
+          echo ""
+          echo "The code is ready for merge/deployment."

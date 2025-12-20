@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   telegram-bot:
     build:
@@ -12,18 +10,20 @@ services:
     environment:
       - TZ=Europe/Rome
       - PYTHONUNBUFFERED=1
-      # Add your environment variables here
-      # - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      # - DATABASE_URL=${DATABASE_URL}
-    
+      # Add your environment variables here or use env_file
+
+    # Usa file .env per variabili sensibili
+    env_file:
+      - .env
+
     # Volumes for persistent data
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
       - ./authorized_users.json:/app/authorized_users.json
       - ./input_prescriptions.json:/app/input_prescriptions.json
-      - ./config.json:/app/config.json:ro
       - ./reports_pdf:/app/reports_pdf
+      - ./prenotazioni_pdf:/app/prenotazioni_pdf
       - ./debug_responses:/app/debug_responses
     
     # Network mode (use host for easier networking, or create custom network)

@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   telegram-bot:
     image: ghcr.io/lucatomei/laziohealthmonitorbot:latest
@@ -24,6 +22,7 @@ services:
       - ./authorized_users.json:/app/authorized_users.json
       - ./input_prescriptions.json:/app/input_prescriptions.json
       - ./reports_pdf:/app/reports_pdf
+      - ./prenotazioni_pdf:/app/prenotazioni_pdf
       - ./debug_responses:/app/debug_responses
     
     # Network mode
