@@ -3,8 +3,11 @@
 Un bot Telegram avanzato che monitora automaticamente le disponibilità del Servizio Sanitario Nazionale nella Regione Lazio, invia notifiche quando sono disponibili nuovi appuntamenti e permette la prenotazione diretta degli appuntamenti.
 
 ![Banner](https://img.shields.io/badge/Regione-Lazio-green)
-![Python](https://img.shields.io/badge/Python-3.7+-blue)
+![Python](https://img.shields.io/badge/Python-3.11-blue)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
+![CI Validation](https://github.com/LucaTomei/LazioHealthMonitorBot/actions/workflows/ci-validation.yml/badge.svg)
+![Docker Publish](https://github.com/LucaTomei/LazioHealthMonitorBot/actions/workflows/docker-publish.yml/badge.svg)
+![Docker Image](https://img.shields.io/badge/docker-ghcr.io-blue)
 
 ## 📋 Caratteristiche
 
