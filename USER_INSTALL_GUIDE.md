@@ -86,6 +86,7 @@ docker run -d \
   -v $(pwd)/logs:/app/logs \
   -v $(pwd)/data:/app/data \
   -v $(pwd)/reports_pdf:/app/reports_pdf \
+  -v $(pwd)/prenotazioni_pdf:/app/prenotazioni_pdf \
   ghcr.io/lucatomei/laziohealthmonitorbot:latest
 
 # Verifica che funzioni
@@ -154,7 +155,8 @@ docker rm lazio-health-bot
 ├── input_prescriptions.json    ← Le tue prescrizioni
 ├── logs/                       ← Log del bot
 ├── data/                       ← Cache dati
-└── reports_pdf/                ← Referti scaricati
+├── reports_pdf/                ← Referti scaricati
+└── prenotazioni_pdf/           ← PDF conferme prenotazioni
 ```
 
 ---
