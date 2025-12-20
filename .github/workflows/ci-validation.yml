@@ -91,13 +91,25 @@ jobs:
 
       - name: Validate docker-compose files
         run: |
-          echo "Validating docker-compose.yml..."
+          # Create dummy .env file for docker-compose validation
+          echo "Creating dummy .env for validation..."
+          cat > .env << 'EOF'
+          TELEGRAM_BOT_TOKEN=test_token_for_ci
+          SERVER_NAME=ci-test
+          LOG_LEVEL=INFO
+          TZ=Europe/Rome
+          EOF
+
+          echo "Validating docker-compose-yml..."
           docker compose -f docker-compose-yml config > /dev/null
           echo "✓ docker-compose-yml is valid"
 
           echo "Validating docker-compose.ghcr.yml..."
           docker compose -f docker-compose.ghcr.yml config > /dev/null
           echo "✓ docker-compose.ghcr.yml is valid"
+
+          # Clean up
+          rm .env
 
       - name: Check volume mappings
         run: |
