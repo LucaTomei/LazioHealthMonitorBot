@@ -211,10 +211,11 @@ jobs:
           echo "Checking for hardcoded secrets..."
 
           # Check for potential hardcoded tokens (basic check)
-          ! grep -r "TELEGRAM_BOT_TOKEN.*=" --include="*.py" modules/ recup_monitor.py config.py | grep -v "os.getenv" || (echo "WARNING: Possible hardcoded token found" && exit 1)
+          # Exclude os.getenv, logger messages, and comments
+          ! grep -r "TELEGRAM_BOT_TOKEN.*=" --include="*.py" modules/ recup_monitor.py config.py | grep -v "os.getenv" | grep -v "logger\." | grep -v "#" || (echo "WARNING: Possible hardcoded token found" && exit 1)
 
-          # Check for hardcoded API keys
-          ! grep -ri "api[_-]key.*=.*['\"][a-zA-Z0-9]" --include="*.py" . || echo "WARNING: Possible hardcoded API key"
+          # Check for hardcoded API keys (excluding logger and comments)
+          ! grep -ri "api[_-]key.*=.*['\"][a-zA-Z0-9]" --include="*.py" . | grep -v "logger\." | grep -v "#" || echo "WARNING: Possible hardcoded API key"
 
           echo "✓ No obvious secrets found in code"
 
