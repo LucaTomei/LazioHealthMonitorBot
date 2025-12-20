@@ -113,10 +113,16 @@ previous_data.json
 *.log
 /prenotazioni_pdf/
 /reports_pdf/
+/logs/
+/data/
+/debug_responses/
 merged_file.txt
 merge_files_code_ALL.bat
 prenotazioni_pdf
 reports_pdf
+logs
+data
+debug_responses
 reports_monitoring.json
 
 *backup
