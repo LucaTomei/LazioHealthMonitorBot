@@ -39,6 +39,8 @@ jobs:
           echo "✓ All Python files have valid syntax"
 
       - name: Verify imports
+        env:
+          TELEGRAM_BOT_TOKEN: "test_token_for_ci"
         run: |
           echo "Verifying all imports..."
           python -c "import config; print('✓ config.py imports OK')"
@@ -82,7 +84,7 @@ jobs:
       - name: Test Docker image
         run: |
           echo "Testing Docker image..."
-          docker run --rm test-image:latest python -c "import config; print('✓ Config imports OK in container')"
+          docker run --rm -e TELEGRAM_BOT_TOKEN="test_token_for_ci" test-image:latest python -c "import config; print('✓ Config imports OK in container')"
           docker run --rm test-image:latest python -c "import sys; print(f'Python version: {sys.version}')"
           docker run --rm test-image:latest ls -la /app
           echo "✓ Docker image works correctly"
