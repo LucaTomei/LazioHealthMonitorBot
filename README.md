@@ -12,11 +12,24 @@ Bot Telegram per monitorare automaticamente le disponibilità del Servizio Sanit
 ## 🚀 Quick Start - Avvio in 30 Secondi
 
 ```bash
+# Crea le directory necessarie
+mkdir -p ~/lazio-bot/{data,logs,reports_pdf,prenotazioni_pdf}
+
+# Pre-crea i file di configurazione
+echo '[]' > ~/lazio-bot/input_prescriptions.json
+echo '[]' > ~/lazio-bot/authorized_users.json
+
+# Avvia il container
 docker run -d \
   --name lazio-health-bot \
   --restart unless-stopped \
   -e TELEGRAM_BOT_TOKEN=IL_TUO_TOKEN_QUI \
-  -v ~/lazio-bot:/app/data \
+  -v ~/lazio-bot/input_prescriptions.json:/app/input_prescriptions.json \
+  -v ~/lazio-bot/authorized_users.json:/app/authorized_users.json \
+  -v ~/lazio-bot/data:/app/data \
+  -v ~/lazio-bot/logs:/app/logs \
+  -v ~/lazio-bot/reports_pdf:/app/reports_pdf \
+  -v ~/lazio-bot/prenotazioni_pdf:/app/prenotazioni_pdf \
   ghcr.io/lucatomei/laziohealthmonitorbot:latest
 ```
 
@@ -55,13 +68,24 @@ docker run -d \
 ### Metodo 2: Con Persistenza (RACCOMANDATO)
 
 ```bash
-mkdir -p ~/lazio-bot
+# Crea le directory
+mkdir -p ~/lazio-bot/{data,logs,reports_pdf,prenotazioni_pdf}
 
+# Pre-crea i file di configurazione
+echo '[]' > ~/lazio-bot/input_prescriptions.json
+echo '[]' > ~/lazio-bot/authorized_users.json
+
+# Avvia il container
 docker run -d \
   --name lazio-health-bot \
   --restart unless-stopped \
   -e TELEGRAM_BOT_TOKEN=IL_TUO_TOKEN \
-  -v ~/lazio-bot:/app/data \
+  -v ~/lazio-bot/input_prescriptions.json:/app/input_prescriptions.json \
+  -v ~/lazio-bot/authorized_users.json:/app/authorized_users.json \
+  -v ~/lazio-bot/data:/app/data \
+  -v ~/lazio-bot/logs:/app/logs \
+  -v ~/lazio-bot/reports_pdf:/app/reports_pdf \
+  -v ~/lazio-bot/prenotazioni_pdf:/app/prenotazioni_pdf \
   ghcr.io/lucatomei/laziohealthmonitorbot:latest
 ```
 
@@ -70,14 +94,22 @@ docker run -d \
 ### Metodo 3: Setup Completo
 
 ```bash
+# Crea tutte le directory necessarie
 mkdir -p ~/lazio-bot/{data,logs,reports_pdf,prenotazioni_pdf}
 
+# Pre-crea i file di configurazione
+echo '[]' > ~/lazio-bot/input_prescriptions.json
+echo '[]' > ~/lazio-bot/authorized_users.json
+
+# Avvia il container con tutte le configurazioni
 docker run -d \
   --name lazio-health-bot \
   --restart unless-stopped \
   -e TELEGRAM_BOT_TOKEN=IL_TUO_TOKEN \
   -e SERVER_NAME=raspberry-casa \
   -e LOG_LEVEL=INFO \
+  -v ~/lazio-bot/input_prescriptions.json:/app/input_prescriptions.json \
+  -v ~/lazio-bot/authorized_users.json:/app/authorized_users.json \
   -v ~/lazio-bot/data:/app/data \
   -v ~/lazio-bot/logs:/app/logs \
   -v ~/lazio-bot/reports_pdf:/app/reports_pdf \
@@ -179,18 +211,24 @@ Se hai il bot installato con systemd:
 sudo systemctl stop lazio-health-bot
 sudo systemctl disable lazio-health-bot
 
-# 2. Copia dati
-cp ~/.../authorized_users.json ~/lazio-bot/
-cp ~/.../input_prescriptions.json ~/lazio-bot/
+# 2. Prepara le directory
+mkdir -p ~/lazio-bot/{data,logs,reports_pdf,prenotazioni_pdf}
 
-# 3. Avvia con Docker
+# 3. Copia i file di configurazione esistenti
+cp /path/to/old/authorized_users.json ~/lazio-bot/
+cp /path/to/old/input_prescriptions.json ~/lazio-bot/
+
+# 4. Avvia con Docker
 docker run -d \
   --name lazio-health-bot \
   --restart unless-stopped \
   -e TELEGRAM_BOT_TOKEN=IL_TUO_TOKEN \
-  -v ~/lazio-bot/authorized_users.json:/app/authorized_users.json \
   -v ~/lazio-bot/input_prescriptions.json:/app/input_prescriptions.json \
+  -v ~/lazio-bot/authorized_users.json:/app/authorized_users.json \
   -v ~/lazio-bot/data:/app/data \
+  -v ~/lazio-bot/logs:/app/logs \
+  -v ~/lazio-bot/reports_pdf:/app/reports_pdf \
+  -v ~/lazio-bot/prenotazioni_pdf:/app/prenotazioni_pdf \
   ghcr.io/lucatomei/laziohealthmonitorbot:latest
 ```
 
