@@ -1,6 +1,6 @@
 # Lazio Health Monitor Bot
 
-Un bot Telegram avanzato che monitora automaticamente le disponibilità del Servizio Sanitario Nazionale nella Regione Lazio, invia notifiche quando sono disponibili nuovi appuntamenti e permette la prenotazione diretta degli appuntamenti.
+Bot Telegram per monitorare automaticamente le disponibilità del Servizio Sanitario Nazionale nella Regione Lazio.
 
 ![Banner](https://img.shields.io/badge/Regione-Lazio-green)
 ![Python](https://img.shields.io/badge/Python-3.11-blue)
@@ -9,248 +9,323 @@ Un bot Telegram avanzato che monitora automaticamente le disponibilità del Serv
 ![Docker Publish](https://github.com/LucaTomei/LazioHealthMonitorBot/actions/workflows/docker-publish.yml/badge.svg)
 ![Docker Image](https://img.shields.io/badge/docker-ghcr.io-blue)
 
-## 📋 Caratteristiche
-
-- 🔍 **Monitoraggio automatico**: Controlla le disponibilità ogni 5 minuti
-- 🔔 **Notifiche intelligenti**: Ricevi avvisi personalizzati quando ci sono nuovi appuntamenti
-- 📅 **Filtro date**: Configura notifiche solo per appuntamenti entro un periodo specificato
-- 🚫 **Blacklist ospedali**: Escludi strutture specifiche dalle notifiche per ogni prescrizione
-- 🏥 **Prenotazione diretta**: Prenota appuntamenti direttamente dal bot
-- 🤖 **Prenotazione automatica**: Prenota automaticamente il primo slot disponibile
-- 📝 **Gestione prenotazioni**: Visualizza e disdici le tue prenotazioni attive
-- 📄 **PDF delle prenotazioni**: Ricevi automaticamente la conferma della prenotazione in PDF
-- 👥 **Sistema multi-utente**: Gestione di utenti autorizzati
-- 📱 **Interfaccia intuitiva**: Tastiera personalizzata per una facile interazione
-- 📊 **Dettagli completi**: Visualizza ospedali, date, orari e costi
-- 🔐 **Accesso sicuro**: Solo gli utenti autorizzati possono utilizzare il bot
-- ⚡ **Architettura multi-processo**: Interazione reattiva anche durante le scansioni
-
-## 🚀 Guida all'installazione
-
-### Prerequisiti
-
-- Python 3.7+
-- `python-telegram-bot` (v20.0+)
-- `requests`
-- `urllib3`
+## 🚀 Quick Start - Avvio in 30 Secondi
 
 ```bash
-# Installa le dipendenze
-pip install python-telegram-bot requests urllib3
+docker run -d \
+  --name lazio-health-bot \
+  --restart unless-stopped \
+  -e TELEGRAM_BOT_TOKEN=IL_TUO_TOKEN_QUI \
+  -v ~/lazio-bot:/app/data \
+  ghcr.io/lucatomei/laziohealthmonitorbot:latest
 ```
 
-### Passaggio 1: Creare un bot Telegram
-
-1. Apri Telegram e cerca "@BotFather"
-2. Invia il comando `/newbot`
-3. Segui le istruzioni per creare un bot
-4. Salva il token API fornito da BotFather
-5. Avvia una chat con il tuo nuovo bot
-6. Per ottenere il tuo ID chat, cerca "@userinfobot" su Telegram e invia un messaggio qualsiasi
-
-### Configurazione
-
-1. Clona il repository:
-```bash
-git clone https://github.com/yourusername/lazio-health-monitor.git
-cd lazio-health-monitor
-```
-
-2. Configura il bot:
-   - Modifica il token Telegram nel file `config.py`
-   - Personalizza altre impostazioni se necessario
-
-3. Esegui il bot:
-```bash
-# Versione standard (monitoraggio e bot nello stesso processo)
-python recup_monitor.py
-
-# Versione multi-processo (più reattiva)
-python recup_monitor_multiprocess.py
-```
-
-## 🎮 Utilizzo
-
-### Comandi principali
-
-- `/start` - Avvia il bot e mostra il menu principale
-- `/cancel` - Annulla l'operazione corrente
-
-### Menu del bot
-
-- **➕ Aggiungi Prescrizione** - Aggiungi una nuova prescrizione da monitorare
-- **➖ Rimuovi Prescrizione** - Smetti di monitorare una prescrizione
-- **📋 Lista Prescrizioni** - Visualizza le prescrizioni in monitoraggio
-- **🔄 Verifica Disponibilità** - Controlla immediatamente le disponibilità
-- **🔔 Gestisci Notifiche** - Attiva/disattiva notifiche per una prescrizione
-- **⏱ Imposta Filtro Date** - Filtra le notifiche entro un periodo di mesi
-- **🚫 Blacklist Ospedali** - Escludi ospedali specifici dalle notifiche
-- **🏥 Prenota** - Prenota un appuntamento per una prescrizione
-- **🤖 Prenota Automaticamente** - Prenota automaticamente il primo slot disponibile
-- **📝 Le mie Prenotazioni** - Visualizza e gestisci le prenotazioni attive
-- **ℹ️ Informazioni** - Mostra informazioni sul bot
-- **🔑 Autorizza Utente** - (Solo admin) Autorizza nuovi utenti ad utilizzare il bot
-
-### Come aggiungere una prescrizione
-
-1. Seleziona "➕ Aggiungi Prescrizione"
-2. Inserisci il codice fiscale del paziente
-3. Inserisci il codice NRE (Numero Ricetta Elettronica)
-4. Conferma l'aggiunta
-
-Il bot verificherà la validità della prescrizione e inizierà a monitorarla automaticamente.
-
-### Come prenotare un appuntamento
-
-1. Seleziona "🏥 Prenota"
-2. Scegli la prescrizione da prenotare
-3. Inserisci il tuo numero di telefono e email
-4. Visualizza le disponibilità e seleziona quella preferita
-5. Conferma la prenotazione
-6. Ricevi il PDF di conferma direttamente in chat
-
-### Come prenotare automaticamente
-
-1. Seleziona "🤖 Prenota Automaticamente"
-2. Scegli la prescrizione da prenotare
-3. Inserisci il tuo numero di telefono e email
-4. Il sistema prenoterà automaticamente il primo slot disponibile
-5. Ricevi il PDF di conferma direttamente in chat
-
-### Come gestire le prenotazioni
-
-1. Seleziona "📝 Le mie Prenotazioni"
-2. Visualizza l'elenco delle prenotazioni attive
-3. Per disdire una prenotazione, seleziona "❌ Disdici una prenotazione"
-4. Scegli quale prenotazione disdire
-5. Conferma la disdetta
-
-### Come gestire la blacklist degli ospedali
-
-1. Seleziona "🚫 Blacklist Ospedali"
-2. Scegli la prescrizione per cui vuoi gestire la blacklist
-3. Scorri la lista degli ospedali disponibili (usa i pulsanti ⬅️ e ➡️ per navigare)
-4. Seleziona gli ospedali da escludere (❌) o includere (✅) nelle notifiche
-5. Al termine, premi "✅ Conferma" per salvare le preferenze
-
-Le notifiche relative alla prescrizione selezionata non mostreranno più disponibilità negli ospedali esclusi.
-
-## 🔒 Gestione degli utenti
-
-Il bot implementa un sistema di autorizzazione:
-
-- Il primo utente che interagisce con il bot diventa automaticamente l'amministratore
-- Solo l'amministratore può autorizzare nuovi utenti
-- Gli utenti non autorizzati non possono utilizzare il bot
-
-Per autorizzare un nuovo utente:
-1. L'amministratore seleziona "🔑 Autorizza Utente"
-2. Inserisce l'ID Telegram dell'utente da autorizzare
-3. L'utente autorizzato può ora utilizzare il bot
-
-## 📁 Struttura del progetto
-
-### File principali
-- `config.py` - Configurazioni e costanti globali
-- `recup_monitor.py` - Versione standard del bot
-- `recup_monitor_multiprocess.py` - Versione multi-processo per maggiore reattività
-
-### Directory e moduli
-- `/modules/` - Directory dei moduli
-  - `api_client.py` - Funzioni per l'interazione con l'API RecUP
-  - `booking_client.py` - Funzioni per la prenotazione appuntamenti
-  - `bot_handlers.py` - Gestori per i comandi del bot Telegram
-  - `data_utils.py` - Utilità per la gestione dei dati
-  - `monitoring.py` - Funzioni per il monitoraggio delle prescrizioni
-  - `prescription_processor.py` - Elaborazione delle prescrizioni
-
-### File di dati
-- `input_prescriptions.json` - Salva le prescrizioni monitorate
-- `previous_data.json` - Memorizza i dati delle disponibilità precedenti
-- `authorized_users.json` - Elenco degli utenti autorizzati
-- `recup_monitor.log` - File di log con rotazione automatica
-
-## ⚙️ Configurazione delle prescrizioni
-
-### Parametri di base
-| Parametro | Tipo | Descrizione |
-|-----------|------|-------------|
-| `fiscal_code` | String | Codice fiscale del paziente |
-| `nre` | String | Numero di Ricetta Elettronica da monitorare |
-| `telegram_chat_id` | Number | ID della chat Telegram per le notifiche |
-| `notifications_enabled` | Boolean | Se abilitare le notifiche |
-| `description` | String | Descrizione della prescrizione (autopopolata) |
-| `patient_info` | Object | Informazioni sul paziente (autopopolate) |
-| `bookings` | Array | Prenotazioni associate (se presenti) |
-
-### Opzioni di configurazione (`config`)
-| Opzione | Tipo | Default | Descrizione |
-|---------|------|---------|-------------|
-| `only_new_dates` | Boolean | `true` | Notifiche solo per nuove disponibilità |
-| `notify_removed` | Boolean | `false` | Notifiche per disponibilità rimosse |
-| `min_changes_to_notify` | Number | `1` | Numero minimo di cambiamenti per la notifica |
-| `time_threshold_minutes` | Number | `60` | Considera due appuntamenti variati dello stesso orario |
-| `show_all_current` | Boolean | `true` | Mostra tutte le disponibilità nel messaggio |
-| `months_limit` | Number/null | `null` | Filtra appuntamenti entro X mesi (null = nessun limite) |
-| `hospitals_blacklist` | Array | `[]` | Elenco degli ospedali da escludere dalle notifiche |
-
-## 🎛️ Architettura
-
-### Standard vs Multi-processo
-
-Il bot può essere eseguito in due modalità:
-
-1. **Standard** (`recup_monitor.py`):
-   - Bot e monitoraggio funzionano nello stesso processo
-   - Utilizzo di memoria più efficiente
-   - Potenziali rallentamenti durante la scansione
-
-2. **Multi-processo** (`recup_monitor_multiprocess.py`):
-   - Bot e monitoraggio in processi separati
-   - Interazione reattiva anche durante le scansioni
-   - Utilizzo di memoria leggermente maggiore
-   - Isolamento degli errori tra i processi
-
-### Flusso di dati
-
-1. **Monitoraggio**:
-   - Caricamento delle prescrizioni da `input_prescriptions.json`
-   - Interrogazione dell'API RecUP per ogni prescrizione
-   - Confronto con i dati precedenti in `previous_data.json`
-   - Invio di notifiche in caso di cambiamenti significativi
-
-2. **Prenotazione**:
-   - Autenticazione con l'API RecUP
-   - Verifica della disponibilità per la prescrizione
-   - Pre-prenotazione dello slot selezionato
-   - Conferma della prenotazione con i dati di contatto
-   - Download e invio del PDF di conferma
-
-## 🔧 Risoluzione dei problemi
-
-- **Errore di autorizzazione**: Assicurati che il tuo ID Telegram sia nella lista degli utenti autorizzati.
-- **Nessun appuntamento trovato**: Verifica che il codice fiscale e l'NRE siano corretti.
-- **Bot non risponde**: Prova la versione multi-processo per una maggiore reattività.
-- **Prenotazione fallita**: Verifica che i dati di contatto siano corretti e che lo slot sia ancora disponibile.
-- **Errori nei file**: Controlla i log in `recup_monitor.log` per dettagli.
-- **"Non disponibile" nei messaggi**: Potrebbe esserci un problema con la descrizione della prescrizione. Rimuovila e aggiungila di nuovo.
-
-## 🔄 Aggiornamenti futuri
-
-- Supporto per più regioni oltre al Lazio
-- Interfaccia web per la gestione
-- Supporto per prescrizioni multiple in un'unica prenotazione
-- Ricerca intelligente di appuntamenti basata su preferenze di località e orario
-
-## 📜 Licenza
-
-Questo progetto è rilasciato sotto licenza MIT. Vedi il file [LICENSE](LICENSE) per i dettagli.
-
-## 📞 Contatti
-
-Per domande, suggerimenti o segnalazioni di bug, apri un issue su GitHub o contattami direttamente.
+**Fatto!** Apri Telegram, cerca il tuo bot e invia `/start`
 
 ---
 
-⚠️ **Disclaimer**: Questo bot utilizza un'API non ufficiale del sistema RecUP della Regione Lazio. È stato creato solo per scopi personali e educativi. L'utilizzo del bot è a tuo rischio e pericolo. L'autore non è responsabile per eventuali problemi derivanti dall'utilizzo di questo software.
+## 📋 Caratteristiche
 
+- 🔍 **Monitoraggio automatico** delle disponibilità ogni 5 minuti
+- 🔔 **Notifiche intelligenti** per nuovi appuntamenti
+- 📅 **Filtro date** per appuntamenti entro un periodo specifico
+- 🚫 **Blacklist ospedali** per escludere strutture specifiche
+- 🏥 **Prenotazione diretta** appuntamenti dal bot
+- 🤖 **Prenotazione automatica** del primo slot disponibile
+- 📝 **Gestione prenotazioni** attive e disdette
+- 📄 **PDF conferme** prenotazioni e referti
+- 👥 **Multi-utente** con sistema autorizzazioni
+- 🐳 **Auto-configurante** con Docker
+
+---
+
+## 🐳 Installazione Docker
+
+### Metodo 1: Minimo (Test Veloce)
+
+```bash
+docker run -d \
+  --name lazio-health-bot \
+  -e TELEGRAM_BOT_TOKEN=IL_TUO_TOKEN \
+  ghcr.io/lucatomei/laziohealthmonitorbot:latest
+```
+
+⚠️ I dati non persistono
+
+### Metodo 2: Con Persistenza (RACCOMANDATO)
+
+```bash
+mkdir -p ~/lazio-bot
+
+docker run -d \
+  --name lazio-health-bot \
+  --restart unless-stopped \
+  -e TELEGRAM_BOT_TOKEN=IL_TUO_TOKEN \
+  -v ~/lazio-bot:/app/data \
+  ghcr.io/lucatomei/laziohealthmonitorbot:latest
+```
+
+✅ I dati persistono tra riavvii
+
+### Metodo 3: Setup Completo
+
+```bash
+mkdir -p ~/lazio-bot/{data,logs,reports_pdf,prenotazioni_pdf}
+
+docker run -d \
+  --name lazio-health-bot \
+  --restart unless-stopped \
+  -e TELEGRAM_BOT_TOKEN=IL_TUO_TOKEN \
+  -e SERVER_NAME=raspberry-casa \
+  -e LOG_LEVEL=INFO \
+  -v ~/lazio-bot/data:/app/data \
+  -v ~/lazio-bot/logs:/app/logs \
+  -v ~/lazio-bot/reports_pdf:/app/reports_pdf \
+  -v ~/lazio-bot/prenotazioni_pdf:/app/prenotazioni_pdf \
+  ghcr.io/lucatomei/laziohealthmonitorbot:latest
+```
+
+✅ Configurazione completa con log e PDF persistenti
+
+---
+
+## 🔧 Configurazione
+
+### Ottenere il Token Telegram
+
+1. Apri Telegram e cerca **@BotFather**
+2. Invia `/newbot`
+3. Segui le istruzioni
+4. Salva il **token** fornito
+
+### Ottenere il Tuo User ID
+
+1. Cerca **@userinfobot** su Telegram
+2. Invia `/start`
+3. Salva il tuo **User ID**
+
+### Variabili d'Ambiente
+
+| Variabile | Obbligatoria | Default | Descrizione |
+|-----------|--------------|---------|-------------|
+| `TELEGRAM_BOT_TOKEN` | ✅ Sì | - | Token del bot |
+| `SERVER_NAME` | No | `server1` | Nome server |
+| `LOG_LEVEL` | No | `INFO` | Livello log (DEBUG, INFO, WARNING) |
+| `CHECK_INTERVAL` | No | `300` | Intervallo controlli (secondi) |
+| `TZ` | No | `Europe/Rome` | Timezone |
+
+---
+
+## 📱 Utilizzo
+
+### Comandi Bot
+
+Invia `/start` al bot e usa il menu:
+
+- **➕ Aggiungi Prescrizione** - Monitora una nuova ricetta
+- **📋 Lista Prescrizioni** - Vedi ricette monitorate
+- **🔄 Verifica Disponibilità** - Controlla subito
+- **🏥 Prenota** - Prenota un appuntamento
+- **🤖 Prenota Automaticamente** - Auto-prenota primo slot
+- **📝 Le mie Prenotazioni** - Gestisci prenotazioni
+- **🔔 Gestisci Notifiche** - Attiva/disattiva notifiche
+- **⏱ Imposta Filtro Date** - Filtra per periodo
+- **🚫 Blacklist Ospedali** - Escludi strutture
+- **📊 Configura Monitoraggio Referti** - Setup referti
+- **ℹ️ Informazioni** - Info sul bot
+
+### Primo Utilizzo
+
+1. ✅ Avvia il container
+2. 📱 Cerca il bot su Telegram
+3. ✉️ Invia `/start`
+4. 👑 Diventi admin automaticamente (primo utente)
+5. ➕ Aggiungi la tua prima prescrizione
+
+---
+
+## 🔧 Gestione Container
+
+```bash
+# Visualizza log
+docker logs -f lazio-health-bot
+
+# Ferma
+docker stop lazio-health-bot
+
+# Avvia
+docker start lazio-health-bot
+
+# Riavvia
+docker restart lazio-health-bot
+
+# Rimuovi
+docker rm -f lazio-health-bot
+
+# Aggiorna
+docker pull ghcr.io/lucatomei/laziohealthmonitorbot:latest
+docker rm -f lazio-health-bot
+# Poi riesegui il comando docker run
+```
+
+---
+
+## 🔄 Migrazione da Systemd
+
+Se hai il bot installato con systemd:
+
+```bash
+# 1. Ferma systemd
+sudo systemctl stop lazio-health-bot
+sudo systemctl disable lazio-health-bot
+
+# 2. Copia dati
+cp ~/.../authorized_users.json ~/lazio-bot/
+cp ~/.../input_prescriptions.json ~/lazio-bot/
+
+# 3. Avvia con Docker
+docker run -d \
+  --name lazio-health-bot \
+  --restart unless-stopped \
+  -e TELEGRAM_BOT_TOKEN=IL_TUO_TOKEN \
+  -v ~/lazio-bot/authorized_users.json:/app/authorized_users.json \
+  -v ~/lazio-bot/input_prescriptions.json:/app/input_prescriptions.json \
+  -v ~/lazio-bot/data:/app/data \
+  ghcr.io/lucatomei/laziohealthmonitorbot:latest
+```
+
+---
+
+## 🐛 Risoluzione Problemi
+
+### Bot non parte
+
+```bash
+docker logs lazio-health-bot
+```
+
+**Errore comune**: `TELEGRAM_BOT_TOKEN is required`
+- Soluzione: Aggiungi `-e TELEGRAM_BOT_TOKEN=...` al comando docker run
+
+### Permission denied
+
+```bash
+chmod -R 777 ~/lazio-bot
+```
+
+### Container si ferma subito
+
+Controlla i log per vedere l'errore:
+```bash
+docker logs lazio-health-bot
+```
+
+---
+
+## 📚 Architettura
+
+### Struttura Dati
+
+```
+~/lazio-bot/
+├── data/
+│   ├── previous_data.json       # Cache disponibilità
+│   └── reports_monitoring.json  # Config monitoraggio
+├── logs/
+│   └── recup_monitor.log       # Log applicazione
+├── reports_pdf/                 # Referti scaricati
+├── prenotazioni_pdf/            # Conferme prenotazioni
+├── authorized_users.json        # Utenti autorizzati (auto-creato)
+└── input_prescriptions.json     # Prescrizioni (auto-creato)
+```
+
+### Container
+
+- **Image**: `ghcr.io/lucatomei/laziohealthmonitorbot:latest`
+- **User**: `botuser` (UID 1000, non-root per sicurezza)
+- **Auto-configura**: Crea file mancanti all'avvio
+- **Multi-arch**: Supporta amd64 e arm64 (Raspberry Pi)
+
+---
+
+## 🔒 Sicurezza
+
+- ✅ Container non gira come root
+- ✅ Token mai committato nel repository
+- ✅ Auto-creazione file con permessi corretti
+- ✅ Primo utente diventa admin automaticamente
+- ✅ Sistema autorizzazioni multi-utente
+
+---
+
+## 🚀 Sviluppo
+
+### Build Locale
+
+```bash
+git clone https://github.com/LucaTomei/LazioHealthMonitorBot.git
+cd LazioHealthMonitorBot
+docker build -t lazio-bot:local .
+docker run -d -e TELEGRAM_BOT_TOKEN=... lazio-bot:local
+```
+
+### Struttura Codice
+
+```
+.
+├── recup_monitor.py           # Main application
+├── config.py                  # Configurazione
+├── modules/                   # Moduli
+│   ├── api_client.py         # API RecUP
+│   ├── booking_client.py     # Prenotazioni
+│   ├── bot_handlers.py       # Handler bot
+│   ├── data_utils.py         # Gestione dati
+│   ├── monitoring.py         # Monitoraggio
+│   └── reports_client.py     # Referti
+├── Dockerfile                 # Immagine Docker
+└── docker-entrypoint.sh      # Script avvio
+```
+
+---
+
+## 📖 Documentazione Avanzata
+
+Per guide dettagliate:
+- [docs/Installazione-Docker.md](docs/Installazione-Docker.md) - Guida completa Docker
+- [docs/Migrazione-da-Systemd-a-Docker.md](docs/Migrazione-da-Systemd-a-Docker.md) - Migrazione systemd
+
+---
+
+## 🤝 Contribuire
+
+1. Fork del repository
+2. Crea branch: `git checkout -b feature/nuova-funzione`
+3. Commit: `git commit -m "feat: descrizione"`
+4. Push: `git push origin feature/nuova-funzione`
+5. Apri Pull Request
+
+---
+
+## 📜 Licenza
+
+MIT License - Vedi [LICENSE](LICENSE) per dettagli
+
+---
+
+## 📞 Supporto
+
+- **Issues**: https://github.com/LucaTomei/LazioHealthMonitorBot/issues
+- **Docker Image**: https://github.com/LucaTomei/LazioHealthMonitorBot/pkgs/container/laziohealthmonitorbot
+- **CI/CD**: https://github.com/LucaTomei/LazioHealthMonitorBot/actions
+
+---
+
+## ⚠️ Disclaimer
+
+Questo bot utilizza API non ufficiali del sistema RecUP della Regione Lazio. È stato creato per scopi personali ed educativi. L'utilizzo è a tuo rischio. L'autore non è responsabile per eventuali problemi derivanti dall'uso di questo software.
+
+---
+
+**Autore**: Luca Tomei
+**Versione**: 1.0
+**Ultimo Aggiornamento**: Dicembre 2024

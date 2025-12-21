@@ -85,8 +85,8 @@ jobs:
         run: |
           echo "Testing Docker image..."
           docker run --rm -e TELEGRAM_BOT_TOKEN="test_token_for_ci" test-image:latest python -c "import config; print('✓ Config imports OK in container')"
-          docker run --rm test-image:latest python -c "import sys; print(f'Python version: {sys.version}')"
-          docker run --rm test-image:latest ls -la /app
+          docker run --rm -e TELEGRAM_BOT_TOKEN="test_token_for_ci" test-image:latest python -c "import sys; print(f'Python version: {sys.version}')"
+          docker run --rm -e TELEGRAM_BOT_TOKEN="test_token_for_ci" test-image:latest ls -la /app
           echo "✓ Docker image works correctly"
 
       - name: Validate docker-compose files
