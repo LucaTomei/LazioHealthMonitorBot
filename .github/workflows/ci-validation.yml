@@ -223,8 +223,15 @@ jobs:
         run: |
           echo "Checking Dockerfile security..."
 
-          # Verify non-root user is used
-          grep -q "USER botuser" Dockerfile || (echo "WARNING: Container might run as root" && exit 1)
+          # Verify non-root user strategy is used (either USER directive or gosu in entrypoint)
+          if grep -q "USER botuser" Dockerfile; then
+            echo "✓ Using USER directive for non-root execution"
+          elif grep -q "gosu botuser" Dockerfile && grep -q "ENTRYPOINT" Dockerfile; then
+            echo "✓ Using gosu with entrypoint for non-root execution"
+          else
+            echo "WARNING: Container might run as root - no USER directive or gosu found"
+            exit 1
+          fi
 
           # Verify healthcheck is present
           grep -q "HEALTHCHECK" Dockerfile || (echo "WARNING: No healthcheck in Dockerfile" && exit 1)
