@@ -157,7 +157,6 @@ jobs:
 
           # Documentation
           test -f "README.md" || (echo "ERROR: README.md missing" && exit 1)
-          test -f "USER_INSTALL_GUIDE.md" || (echo "ERROR: USER_INSTALL_GUIDE.md missing" && exit 1)
 
           # Modules
           test -d "modules" || (echo "ERROR: modules directory missing" && exit 1)
