@@ -15,17 +15,11 @@ Bot Telegram per monitorare automaticamente le disponibilità del Servizio Sanit
 # Crea le directory necessarie
 mkdir -p ~/lazio-bot/{data,logs,reports_pdf,prenotazioni_pdf}
 
-# Pre-crea i file di configurazione
-echo '[]' > ~/lazio-bot/input_prescriptions.json
-echo '[]' > ~/lazio-bot/authorized_users.json
-
 # Avvia il container
 docker run -d \
   --name lazio-health-bot \
   --restart unless-stopped \
   -e TELEGRAM_BOT_TOKEN=IL_TUO_TOKEN_QUI \
-  -v ~/lazio-bot/input_prescriptions.json:/app/input_prescriptions.json \
-  -v ~/lazio-bot/authorized_users.json:/app/authorized_users.json \
   -v ~/lazio-bot/data:/app/data \
   -v ~/lazio-bot/logs:/app/logs \
   -v ~/lazio-bot/reports_pdf:/app/reports_pdf \
@@ -64,7 +58,7 @@ docker run -d \
   ghcr.io/lucatomei/laziohealthmonitorbot:latest
 ```
 
-⚠️ I dati non persistono
+⚠️ I dati non persistono al riavvio del container
 
 ### Metodo 2: Con Persistenza (RACCOMANDATO)
 
@@ -72,17 +66,11 @@ docker run -d \
 # Crea le directory
 mkdir -p ~/lazio-bot/{data,logs,reports_pdf,prenotazioni_pdf}
 
-# Pre-crea i file di configurazione
-echo '[]' > ~/lazio-bot/input_prescriptions.json
-echo '[]' > ~/lazio-bot/authorized_users.json
-
 # Avvia il container
 docker run -d \
   --name lazio-health-bot \
   --restart unless-stopped \
   -e TELEGRAM_BOT_TOKEN=IL_TUO_TOKEN \
-  -v ~/lazio-bot/input_prescriptions.json:/app/input_prescriptions.json \
-  -v ~/lazio-bot/authorized_users.json:/app/authorized_users.json \
   -v ~/lazio-bot/data:/app/data \
   -v ~/lazio-bot/logs:/app/logs \
   -v ~/lazio-bot/reports_pdf:/app/reports_pdf \
@@ -90,27 +78,22 @@ docker run -d \
   ghcr.io/lucatomei/laziohealthmonitorbot:latest
 ```
 
-✅ I dati persistono tra riavvii
+✅ Il database SQLite in `data/recup_monitor.db` persiste tra riavvii
 
 ### Metodo 3: Setup Completo
 
 ```bash
-# Crea tutte le directory necessarie
+# Crea le directory
 mkdir -p ~/lazio-bot/{data,logs,reports_pdf,prenotazioni_pdf}
-
-# Pre-crea i file di configurazione
-echo '[]' > ~/lazio-bot/input_prescriptions.json
-echo '[]' > ~/lazio-bot/authorized_users.json
 
 # Avvia il container con tutte le configurazioni
 docker run -d \
   --name lazio-health-bot \
   --restart unless-stopped \
   -e TELEGRAM_BOT_TOKEN=IL_TUO_TOKEN \
-  -e SERVER_NAME=raspberry-casa \
+  -e SERVER_NAME=mio-server \
   -e LOG_LEVEL=INFO \
-  -v ~/lazio-bot/input_prescriptions.json:/app/input_prescriptions.json \
-  -v ~/lazio-bot/authorized_users.json:/app/authorized_users.json \
+  -e GEOAPIFY_API_KEY=LA_TUA_CHIAVE \
   -v ~/lazio-bot/data:/app/data \
   -v ~/lazio-bot/logs:/app/logs \
   -v ~/lazio-bot/reports_pdf:/app/reports_pdf \
@@ -118,7 +101,7 @@ docker run -d \
   ghcr.io/lucatomei/laziohealthmonitorbot:latest
 ```
 
-✅ Configurazione completa con log e PDF persistenti
+✅ Configurazione completa con geocoding e log persistenti
 
 ---
 
@@ -146,6 +129,7 @@ docker run -d \
 | `LOG_LEVEL` | No | `INFO` | Livello log (DEBUG, INFO, WARNING) |
 | `CHECK_INTERVAL` | No | `300` | Intervallo controlli (secondi) |
 | `TZ` | No | `Europe/Rome` | Timezone |
+| `DB_FILE` | No | `data/recup_monitor.db` | Path del database SQLite |
 | `GEOAPIFY_API_KEY` | No | - | API key per geocoding ospedali ([geoapify.com](https://www.geoapify.com)). Se assente il geocoding viene saltato silenziosamente. |
 
 ---
@@ -204,35 +188,46 @@ docker rm -f lazio-health-bot
 
 ---
 
-## 🔄 Migrazione da Systemd
+## 🔄 Migrazione da Systemd (o da versione JSON)
 
-Se hai il bot installato con systemd:
+Se hai il bot installato con systemd o una versione precedente che usava file JSON:
 
 ```bash
-# 1. Ferma systemd
+# 1. Ferma il vecchio bot
 sudo systemctl stop lazio-health-bot
 sudo systemctl disable lazio-health-bot
 
 # 2. Prepara le directory
 mkdir -p ~/lazio-bot/{data,logs,reports_pdf,prenotazioni_pdf}
 
-# 3. Copia i file di configurazione esistenti
+# 3. Copia i vecchi file JSON nella root del bot
+#    Il bot li migrerà automaticamente nel DB al primo avvio
 cp /path/to/old/authorized_users.json ~/lazio-bot/
 cp /path/to/old/input_prescriptions.json ~/lazio-bot/
+cp /path/to/old/previous_data.json ~/lazio-bot/
+cp /path/to/old/locations.json ~/lazio-bot/          # opzionale
 
 # 4. Avvia con Docker
 docker run -d \
   --name lazio-health-bot \
   --restart unless-stopped \
   -e TELEGRAM_BOT_TOKEN=IL_TUO_TOKEN \
-  -v ~/lazio-bot/input_prescriptions.json:/app/input_prescriptions.json \
-  -v ~/lazio-bot/authorized_users.json:/app/authorized_users.json \
   -v ~/lazio-bot/data:/app/data \
   -v ~/lazio-bot/logs:/app/logs \
   -v ~/lazio-bot/reports_pdf:/app/reports_pdf \
   -v ~/lazio-bot/prenotazioni_pdf:/app/prenotazioni_pdf \
   ghcr.io/lucatomei/laziohealthmonitorbot:latest
 ```
+
+Al primo avvio vedrai nei log la migrazione automatica:
+```
+Migrati X utenti da authorized_users.json
+Migrate X prescrizioni da input_prescriptions.json
+Migrati X record disponibilità da previous_data.json
+Migrazione da JSON completata
+```
+
+Dopo la migrazione i file JSON non vengono più usati e possono essere eliminati.
 
 ---
 
@@ -269,15 +264,14 @@ docker logs lazio-health-bot
 ```
 ~/lazio-bot/
 ├── data/
-│   ├── previous_data.json       # Cache disponibilità
-│   └── reports_monitoring.json  # Config monitoraggio
+│   └── recup_monitor.db        # Database SQLite (unico file dati)
 ├── logs/
 │   └── recup_monitor.log       # Log applicazione
 ├── reports_pdf/                 # Referti scaricati
-├── prenotazioni_pdf/            # Conferme prenotazioni
-├── authorized_users.json        # Utenti autorizzati (auto-creato)
-└── input_prescriptions.json     # Prescrizioni (auto-creato)
+└── prenotazioni_pdf/            # Conferme prenotazioni
 ```
+
+> Il database viene creato automaticamente al primo avvio. Non è necessario creare file di configurazione manualmente.
 
 ### Container
 
