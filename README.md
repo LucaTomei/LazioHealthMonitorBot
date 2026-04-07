@@ -48,6 +48,7 @@ docker run -d \
 - 📝 **Gestione prenotazioni** attive e disdette
 - 📄 **PDF conferme** prenotazioni e referti
 - 👥 **Multi-utente** con sistema autorizzazioni
+- 🗺️ **Geocoding ospedali** opzionale via Geoapify
 - 🐳 **Auto-configurante** con Docker
 
 ---
@@ -145,6 +146,7 @@ docker run -d \
 | `LOG_LEVEL` | No | `INFO` | Livello log (DEBUG, INFO, WARNING) |
 | `CHECK_INTERVAL` | No | `300` | Intervallo controlli (secondi) |
 | `TZ` | No | `Europe/Rome` | Timezone |
+| `GEOAPIFY_API_KEY` | No | - | API key per geocoding ospedali ([geoapify.com](https://www.geoapify.com)). Se assente il geocoding viene saltato silenziosamente. |
 
 ---
 
