@@ -1706,9 +1706,13 @@ async def confirm_add_prescription(update: Update, context: ContextTypes.DEFAULT
         }
     }
     
-    # Verifichiamo che la prescrizione sia valida
+    # Verifichiamo che la prescrizione sia valida (in executor per non bloccare l'event loop)
+    await query.edit_message_text("⏳ Verifica della prescrizione in corso, attendere...")
     previous_data = load_previous_data()
-    success, message = process_prescription(new_prescription, previous_data, user_id)
+    loop = asyncio.get_event_loop()
+    success, message = await loop.run_in_executor(
+        None, process_prescription, new_prescription, previous_data, user_id
+    )
     
     if not success:
         await query.edit_message_text(f"⚠️ Impossibile aggiungere la prescrizione: {message}")
