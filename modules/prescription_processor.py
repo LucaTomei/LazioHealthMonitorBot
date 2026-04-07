@@ -334,13 +334,13 @@ def process_prescription(prescription, previous_data, chat_id=None):
         logger.info(f"Prescrizione {prescription_key} già prenotata, monitoraggio saltato")
         return True, prescription.get("description", "Prescrizione prenotata")
     
-    # Step 1: Get access token
+    # Step 1: Get access token (opzionale, serve solo per notifiche push)
     access_token = get_access_token()
     if not access_token:
-        return False, "Impossibile ottenere il token di accesso"
-    
-    # Step 2: Update device token
-    update_device_token(access_token)
+        logger.warning("Token gwapi-az non ottenuto, si continua senza aggiornare il device token")
+    else:
+        # Step 2: Update device token
+        update_device_token(access_token)
     
     # Step 3: Get patient information
     patient_info = get_patient_info(fiscal_code)
