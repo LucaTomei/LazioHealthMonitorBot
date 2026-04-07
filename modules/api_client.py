@@ -380,6 +380,9 @@ def get_availabilities(patient_id, process_id, nre, order_ids):
     
     try:
         response = requests.get(url, headers=headers, params=params, timeout=20)
+        if response.status_code == 400:
+            logger.warning(f"Disponibilità non recuperabili per {nre} (400) — prescrizione probabilmente già prenotata o non più attiva")
+            return {"content": [], "_already_booked": True}
         response.raise_for_status()
         return response.json()
     except Exception as e:

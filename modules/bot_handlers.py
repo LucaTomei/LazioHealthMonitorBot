@@ -2417,7 +2417,13 @@ async def handle_booking_choice(update: Update, context: ContextTypes.DEFAULT_TY
         )
         return WAITING_FOR_SLOT_CHOICE
     else:
-        await waiting_message.edit_text("⚠️ Errore nella ricerca delle disponibilità. Riprova.")
+        msg = result.get("message", "")
+        if "filtri" in msg or "blacklist" in msg or "Nessuna disponibilità" in msg:
+            await waiting_message.edit_text(
+                f"ℹ️ {msg}\n\nProva a modificare la blacklist o il filtro date per questa prescrizione."
+            )
+        else:
+            await waiting_message.edit_text(f"⚠️ {msg}" if msg else "⚠️ Errore nella ricerca delle disponibilità. Riprova.")
         return ConversationHandler.END
        
 async def handle_phone_number(update: Update, context: ContextTypes.DEFAULT_TYPE):

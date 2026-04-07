@@ -483,6 +483,9 @@ def process_prescription(prescription, previous_data, chat_id=None):
         error_msg = f"Impossibile ottenere le disponibilità per {nre}, sei sicuro che non sia già prenotata?"
         logger.error(error_msg)
         return False, error_msg
+    if availabilities.get("_already_booked"):
+        logger.warning(f"Prescrizione {prescription_key} non più prenotabile (400), salto")
+        return True, prescription.get("description", "Prescrizione non più attiva")
     
     current_availabilities = availabilities['content']
     
