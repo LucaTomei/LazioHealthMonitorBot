@@ -57,10 +57,15 @@ logger.info("Token Telegram caricato correttamente")
 # Percorsi dei file - Configurabili via env
 PDF_FOLDER = os.getenv("PDF_FOLDER", "prenotazioni_pdf")
 REPORTS_FOLDER = os.getenv("REPORTS_FOLDER", "reports_pdf")
+
+# Percorsi file JSON — mantenuti per la migrazione automatica a SQLite
 REPORTS_MONITORING_FILE = os.getenv("REPORTS_MONITORING_FILE", "reports_monitoring.json")
 INPUT_FILE = os.getenv("INPUT_FILE", "input_prescriptions.json")
 PREVIOUS_DATA_FILE = os.getenv("PREVIOUS_DATA_FILE", "previous_data.json")
 USERS_FILE = os.getenv("USERS_FILE", "authorized_users.json")
+
+# Database SQLite
+DB_FILE = os.getenv("DB_FILE", "data/recup_monitor.db")
 
 # Crea le directory necessarie
 os.makedirs(PDF_FOLDER, exist_ok=True)
