@@ -25,7 +25,7 @@ def geocode_query(query):
     }
     
     try:
-        response = requests.get(base_url, params=params, headers=headers)
+        response = requests.get(base_url, params=params, headers=headers, timeout=5)
         response.raise_for_status()
         data = response.json()
         if data:
