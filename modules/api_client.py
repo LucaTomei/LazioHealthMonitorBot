@@ -21,7 +21,7 @@ def get_access_token():
     }
     
     try:
-        response = requests.post(token_url, headers=headers, data=data)
+        response = requests.post(token_url, headers=headers, data=data, timeout=15)
         response.raise_for_status()
         return response.json()['access_token']
     except Exception as e:
@@ -47,7 +47,7 @@ def update_device_token(access_token):
             "token_new": "ct6U4eGiTUfJlh-8la_XTW:APA91bGpiDbgIPrQ4HRF6xB2TembPIAtwywCde0hsMEplYm9DLxaws-bUokiv3bwcLyMrYI3ZyKEj6_Gi8FT4jY2w-8-ajUJeH-qdVRFHWdUgLZvYg-ZxVk"
         }
         
-        response = requests.put(url, headers=headers, json=data)
+        response = requests.put(url, headers=headers, json=data, timeout=15)
         response.raise_for_status()
         return response.json()
     except Exception as e:
@@ -74,7 +74,7 @@ def get_patient_info(fiscal_code):
     }
     
     try:
-        response = requests.get(url, headers=headers, params=params)
+        response = requests.get(url, headers=headers, params=params, timeout=20)
         response.raise_for_status()
         return response.json()
     except Exception as e:
@@ -101,7 +101,7 @@ def get_doctor_info(fiscal_code):
     }
     
     try:
-        response = requests.post(url, headers=headers, json=data)
+        response = requests.post(url, headers=headers, json=data, timeout=20)
         response.raise_for_status()
         return response.json()
     except Exception as e:
@@ -141,7 +141,7 @@ def book_appointment(process_id, data_prenotazione, diary_id, service_cur, nre, 
         "personIdentifier": fiscal_code
     }
     
-    response = requests.post(url, headers=headers, json=payload, verify=False)
+    response = requests.post(url, headers=headers, json=payload, verify=False, timeout=20)
     
     # More detailed logging for debugging
     print(f"Pre-booking Status Code: {response.status_code}")
@@ -191,7 +191,7 @@ def complete_booking(fiscal_code, process_id, nre, phone_number, email, lock_id,
         "supplyModeId": "A"
     }
     
-    response = requests.post(url, headers=headers, json=payload, verify=False)
+    response = requests.post(url, headers=headers, json=payload, verify=False, timeout=20)
     
     # Enhanced error handling and logging
     print(f"Complete Booking Status Code: {response.status_code}")
@@ -232,7 +232,7 @@ def get_booking_document(booking_id, output_path=None):
         "Accept-Encoding": "gzip"
     }
     
-    response = requests.get(url, headers=headers, verify=False)
+    response = requests.get(url, headers=headers, verify=False, timeout=20)
     
     # Enhanced error handling
     if response.status_code != 200:
@@ -322,7 +322,7 @@ def check_prescription(patient_id, nre):
     }
     
     try:
-        response = requests.get(url, headers=headers, params=params)
+        response = requests.get(url, headers=headers, params=params, timeout=20)
         response.raise_for_status()
         return response.json()
     except Exception as e:
@@ -348,7 +348,7 @@ def get_prescription_details(patient_id, nre):
     }
     
     try:
-        response = requests.get(url, headers=headers, params=params)
+        response = requests.get(url, headers=headers, params=params, timeout=20)
         response.raise_for_status()
         return response.json()
     except Exception as e:
@@ -379,7 +379,7 @@ def get_availabilities(patient_id, process_id, nre, order_ids):
     }
     
     try:
-        response = requests.get(url, headers=headers, params=params)
+        response = requests.get(url, headers=headers, params=params, timeout=20)
         response.raise_for_status()
         return response.json()
     except Exception as e:

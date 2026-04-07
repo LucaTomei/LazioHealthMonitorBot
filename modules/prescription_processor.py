@@ -446,6 +446,14 @@ def process_prescription(prescription, previous_data, chat_id=None):
         error_msg = f"Impossibile verificare la prescrizione {nre}"
         logger.error(error_msg)
         return False, error_msg
+
+    # Se content è False, la prescrizione non è prenotabile online
+    if check_prescription_result.get('content') is False:
+        messages = check_prescription_result.get('_messages', [])
+        api_msg = messages[0].get('text', '') if messages else ''
+        error_msg = api_msg if api_msg else f"La prescrizione {nre} non è prenotabile online"
+        logger.warning(f"Prescrizione non prenotabile online: {error_msg}")
+        return False, error_msg
     
     # Step 6: Get prescription details
     prescription_details = get_prescription_details(patient_id, nre)
