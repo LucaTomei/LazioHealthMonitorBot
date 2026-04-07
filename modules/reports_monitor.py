@@ -3,49 +3,38 @@ import os
 import logging
 from datetime import datetime
 
-from config import logger, REPORTS_MONITORING_FILE, authorized_users
+from config import logger, authorized_users
 from modules.reports_client import download_reports, download_report_document
 from modules.bot_handlers import send_telegram_message
+from modules.database import get_connection, _lock
+
 
 def load_reports_monitoring():
-    """Carica i dati di monitoraggio dei referti dal file JSON."""
+    """Carica i dati di monitoraggio dei referti dalla tabella reports_monitoring."""
     try:
-        if os.path.exists(REPORTS_MONITORING_FILE):
-            with open(REPORTS_MONITORING_FILE, 'r') as f:
-                return json.load(f)
-        # Se il file non esiste, lo creiamo con un array vuoto
-        with open(REPORTS_MONITORING_FILE, 'w') as f:
-            json.dump([], f)
-        logger.info("Creato nuovo file di monitoraggio referti")
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT data FROM reports_monitoring ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        if row:
+            return json.loads(row["data"])
         return []
     except Exception as e:
         logger.error(f"Errore nel caricare i dati di monitoraggio referti: {str(e)}")
         return []
 
+
 def save_reports_monitoring(data):
-    """Salva i dati di monitoraggio dei referti su file JSON."""
+    """Salva i dati di monitoraggio dei referti nella tabella reports_monitoring (mantiene solo l'ultimo record)."""
     try:
-        file_path = os.path.abspath(REPORTS_MONITORING_FILE)
-        logger.info(f"Tentativo di salvare i dati di monitoraggio referti in: {file_path}")
-        
-        # Verifica se la directory esiste
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
-        
-        # Salva con indentazione per leggibilità
-        with open(file_path, 'w') as f:
-            json.dump(data, f, indent=2)
-        
-        # Verifica che il file esista dopo il salvataggio
-        if os.path.exists(file_path):
-            file_size = os.path.getsize(file_path)
-            logger.info(f"Dati di monitoraggio referti salvati con successo ({file_size} bytes)")
-            
-            # Leggi il file per verificare il contenuto
-            with open(file_path, 'r') as f:
-                content = json.load(f)
-                logger.info(f"Verificato il contenuto: {len(content)} richieste di monitoraggio referti")
-        else:
-            logger.error(f"Il file {file_path} non esiste dopo il salvataggio")
+        with _lock:
+            with get_connection() as conn:
+                conn.execute("DELETE FROM reports_monitoring")
+                conn.execute(
+                    "INSERT INTO reports_monitoring (data) VALUES (?)",
+                    (json.dumps(data),)
+                )
+        logger.info(f"Dati di monitoraggio referti salvati con successo ({len(data)} richieste)")
     except Exception as e:
         logger.error(f"Errore nel salvare i dati di monitoraggio referti: {str(e)}")
 

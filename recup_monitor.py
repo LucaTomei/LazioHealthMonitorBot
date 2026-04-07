@@ -140,7 +140,11 @@ def run_monitoring():
 def main():
     """Funzione principale che avvia il sistema multi-processo."""
     logger.info("Avvio del sistema multi-processo")
-    
+
+    # Inizializzazione del database SQLite (crea schema e migra da JSON se necessario)
+    from modules.database import init_db
+    init_db()
+
     # Caricamento configurazioni e dati comuni
     from modules.data_utils import load_authorized_users
     load_authorized_users()

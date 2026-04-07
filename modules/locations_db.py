@@ -3,7 +3,7 @@ import os
 import logging
 import requests
 
-LOCATIONS_DB_FILE = "locations.json"
+from modules.database import get_connection, _lock
 
 logger = logging.getLogger("LocationsDB")
 
@@ -39,22 +39,37 @@ def geocode_query(query):
 
 
 def load_locations_db():
-    """Carica il database delle location da file JSON."""
-    if os.path.exists(LOCATIONS_DB_FILE):
-        try:
-            with open(LOCATIONS_DB_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except json.JSONDecodeError:
-            logger.warning("File JSON delle location corrotto, restituisco dizionario vuoto")
-            return {}
-    return {}
+    """Carica il database delle location dalla tabella locations."""
+    try:
+        with get_connection() as conn:
+            rows = conn.execute(
+                "SELECT key, hospital, address, latitude, longitude FROM locations"
+            ).fetchall()
+        return {
+            row["key"]: {
+                "hospital": row["hospital"],
+                "address": row["address"],
+                "latitude": row["latitude"],
+                "longitude": row["longitude"],
+            }
+            for row in rows
+        }
+    except Exception as e:
+        logger.warning(f"Errore nel caricamento delle location dal DB: {e}")
+        return {}
 
 
 def save_locations_db(locations):
-    """Salva il database delle location su file JSON."""
+    """Salva il database delle location nella tabella locations (DELETE + INSERT)."""
     try:
-        with open(LOCATIONS_DB_FILE, "w", encoding="utf-8") as f:
-            json.dump(locations, f, indent=4, ensure_ascii=False)
+        with _lock:
+            with get_connection() as conn:
+                conn.execute("DELETE FROM locations")
+                for key, loc in locations.items():
+                    conn.execute(
+                        "INSERT OR REPLACE INTO locations (key, hospital, address, latitude, longitude) VALUES (?, ?, ?, ?, ?)",
+                        (key, loc.get("hospital"), loc.get("address"), loc.get("latitude"), loc.get("longitude"))
+                    )
         logger.info("Database delle location salvato con successo")
     except Exception as e:
         logger.error(f"Errore nel salvataggio del database delle location: {e}")
