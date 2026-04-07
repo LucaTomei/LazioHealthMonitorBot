@@ -24,7 +24,8 @@ from config import (
     WAITING_FOR_EMAIL, WAITING_FOR_SLOT_CHOICE, WAITING_FOR_BOOKING_TO_CANCEL, WAITING_FOR_AUTO_BOOK_CHOICE, AUTHORIZING,
     WAITING_FOR_PRESCRIPTION_BLACKLIST, WAITING_FOR_HOSPITAL_SELECTION,
     WAITING_FOR_BROADCAST_MESSAGE, WAITING_FOR_BROADCAST_CONFIRMATION,
-    WAITING_FOR_FISCAL_CODE_REPORT, WAITING_FOR_PASSWORD_REPORT, WAITING_FOR_REPORT_CHOICE, WAITING_FOR_REPORTS_MONITORING_ACTION
+    WAITING_FOR_FISCAL_CODE_REPORT, WAITING_FOR_PASSWORD_REPORT, WAITING_FOR_REPORT_CHOICE, WAITING_FOR_REPORTS_MONITORING_ACTION,
+    WAITING_FOR_IMPORT_SOURCE
 )
 
 
@@ -1264,6 +1265,11 @@ async def show_hospitals_page(query, user_id):
     
     keyboard.append(navigation)
     
+    # Pulsante importa da altra prescrizione
+    keyboard.append([
+        InlineKeyboardButton("📋 Importa da altra prescrizione", callback_data="import_blacklist")
+    ])
+
     # Pulsanti per conferma/annulla
     keyboard.append([
         InlineKeyboardButton("✅ Conferma", callback_data="confirm_blacklist"),
@@ -1430,8 +1436,72 @@ async def confirm_hospital_blacklist(update: Update, context: ContextTypes.DEFAU
     
     # Puliamo i dati dell'utente
     user_data.pop(user_id, None)
-    
+
     return ConversationHandler.END
+
+
+async def handle_import_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Mostra la lista delle altre prescrizioni da cui importare la blacklist."""
+    query = update.callback_query
+    await query.answer()
+
+    user_id = query.from_user.id
+    current_prescription = user_data[user_id]["selected_prescription"]
+
+    all_prescriptions = load_input_data()
+    others = [
+        (i, p) for i, p in enumerate(all_prescriptions)
+        if not (p["fiscal_code"] == current_prescription["fiscal_code"] and p["nre"] == current_prescription["nre"])
+    ]
+
+    if not others:
+        await query.answer("Nessun'altra prescrizione disponibile.", show_alert=True)
+        return WAITING_FOR_HOSPITAL_SELECTION
+
+    keyboard = []
+    for i, p in others:
+        blacklist = p.get("config", {}).get("hospitals_blacklist", [])
+        label = f"{p.get('description', p['nre'])} ({len(blacklist)} esclusi)"
+        keyboard.append([InlineKeyboardButton(label, callback_data=f"import_from_{i}")])
+    keyboard.append([InlineKeyboardButton("❌ Annulla", callback_data="cancel_import")])
+
+    await query.edit_message_text(
+        "📋 <b>Seleziona la prescrizione da cui importare la blacklist:</b>",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML"
+    )
+    return WAITING_FOR_IMPORT_SOURCE
+
+
+async def handle_import_source_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Importa la blacklist dalla prescrizione selezionata."""
+    query = update.callback_query
+    await query.answer()
+
+    user_id = query.from_user.id
+
+    if query.data == "cancel_import":
+        # Torna alla schermata della blacklist
+        return await show_hospital_selection(update, context)
+
+    idx = int(query.data.split("_")[-1])
+    all_prescriptions = load_input_data()
+    source = all_prescriptions[idx]
+    imported_blacklist = source.get("config", {}).get("hospitals_blacklist", [])
+
+    user_data[user_id]["current_blacklist"] = imported_blacklist.copy()
+
+    await query.answer(f"Importati {len(imported_blacklist)} ospedali esclusi.", show_alert=False)
+    return await show_hospital_selection(update, context)
+
+
+async def show_hospital_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ricarica la schermata di selezione ospedali (usata dopo import)."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    user_data[user_id].setdefault("page", 0)
+    return await show_hospitals_page(query, user_id)
+
 
 async def add_prescription(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Gestisce l'aggiunta di una nuova prescrizione."""
@@ -4032,10 +4102,15 @@ def setup_handlers(application):
             WAITING_FOR_HOSPITAL_SELECTION: [
                 CallbackQueryHandler(handle_hospital_selection, pattern="^toggle_hospital_"),
                 CallbackQueryHandler(handle_hospital_selection, pattern="^page_"),
-                CallbackQueryHandler(handle_hospital_selection, pattern="^blacklist_all$"), 
-                CallbackQueryHandler(handle_hospital_selection, pattern="^whitelist_all$"), 
+                CallbackQueryHandler(handle_hospital_selection, pattern="^blacklist_all$"),
+                CallbackQueryHandler(handle_hospital_selection, pattern="^whitelist_all$"),
                 CallbackQueryHandler(confirm_hospital_blacklist, pattern="^confirm_blacklist"),
+                CallbackQueryHandler(handle_import_blacklist, pattern="^import_blacklist$"),
                 CallbackQueryHandler(cancel_operation, pattern="^cancel_")
+            ],
+            WAITING_FOR_IMPORT_SOURCE: [
+                CallbackQueryHandler(handle_import_source_selection, pattern="^import_from_"),
+                CallbackQueryHandler(handle_import_source_selection, pattern="^cancel_import$"),
             ],
             WAITING_FOR_BROADCAST_MESSAGE: [
                 MessageHandler(filters.Regex("^❌ Annulla$"), cancel_operation),
