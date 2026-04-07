@@ -535,19 +535,31 @@ def process_prescription(prescription, previous_data, chat_id=None):
         
         if notifications_enabled:
             try:
-                # Utilizziamo il metodo normale invece di quello asincrono per evitare problemi
-                import requests
-                
+                import requests as _requests
+                import json as _json
+
                 url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-                data = {
+
+                payload = {
                     "chat_id": telegram_chat_id,
                     "text": changes_message,
-                    "parse_mode": "HTML"
+                    "parse_mode": "HTML",
                 }
-                
-                response = requests.post(url, data=data, timeout=10)
+
+                # Aggiungi pulsante "Prenota subito" se la prescrizione ha i contatti
+                if prescription.get("phone") and prescription.get("email"):
+                    callback = f"quickbook_{fiscal_code}_{nre}"
+                    if len(callback) <= 64:
+                        payload["reply_markup"] = _json.dumps({
+                            "inline_keyboard": [[{
+                                "text": "📅 Prenota subito",
+                                "callback_data": callback
+                            }]]
+                        })
+
+                response = _requests.post(url, json=payload, timeout=10)
                 response.raise_for_status()
-                
+
                 logger.info(f"Notifica inviata al chat ID: {telegram_chat_id}")
             except Exception as e:
                 logger.error(f"Errore nell'inviare notifica: {str(e)}")

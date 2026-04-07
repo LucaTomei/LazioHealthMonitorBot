@@ -3855,7 +3855,7 @@ async def handle_auth_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     if not text.isdigit():
         await update.message.reply_text("⚠️ L'ID utente deve essere un numero. Riprova oppure digita /cancel per annullare:")
-        return  # Resta nello stesso stato finché non riceve un input valido
+        return AUTHORIZING
     
     new_user_id = text
     if new_user_id in authorized_users:
@@ -4020,6 +4020,105 @@ async def error_recovery(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 # =============================================================================
+async def handle_quickbook(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gestisce il pulsante 'Prenota subito' nelle notifiche di monitoraggio."""
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    # Estrae fiscal_code e nre dal callback_data: "quickbook_FISCALCODE_NRE"
+    parts = query.data.split("_", 2)
+    if len(parts) < 3:
+        await query.edit_message_reply_markup(reply_markup=None)
+        await context.bot.send_message(chat_id=user_id, text="⚠️ Dati prenotazione non validi.")
+        return
+
+    fiscal_code, nre = parts[1], parts[2]
+
+    # Cerca la prescrizione nel DB
+    prescriptions = load_input_data()
+    prescription = next(
+        (p for p in prescriptions if p["fiscal_code"] == fiscal_code and p["nre"] == nre),
+        None
+    )
+    if not prescription:
+        await context.bot.send_message(chat_id=user_id, text="⚠️ Prescrizione non trovata.")
+        return
+
+    if not prescription.get("phone") or not prescription.get("email"):
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="⚠️ Per prenotare serve telefono ed email. Aggiungili dalla sezione '🏥 Prenota'."
+        )
+        return
+
+    loading = await context.bot.send_message(chat_id=user_id, text="🔍 Ricerca disponibilità in corso...")
+
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None,
+        lambda: booking_workflow(
+            fiscal_code=fiscal_code,
+            nre=nre,
+            phone_number=prescription["phone"],
+            email=prescription["email"],
+            slot_choice=-1
+        )
+    )
+
+    if not result.get("success") or result.get("action") != "list_slots":
+        msg = result.get("message", "Nessuna disponibilità trovata.")
+        if "filtri" in msg or "blacklist" in msg or "Nessuna" in msg:
+            await loading.edit_text(f"ℹ️ {msg}")
+        else:
+            await loading.edit_text(f"⚠️ {msg}")
+        return
+
+    slots = result.get("slots", [])
+    if not slots:
+        await loading.edit_text("ℹ️ Nessuna disponibilità trovata per questa prescrizione.")
+        return
+
+    # Salva i dati per la prenotazione successiva
+    user_data[user_id] = {
+        "action": "book_prescription",
+        "selected_prescription": prescription,
+        "phone": prescription["phone"],
+        "email": prescription["email"],
+        "booking_details": result,
+    }
+
+    message_text = f"📋 <b>Disponibilità per {result.get('service', 'Prestazione')}</b>\n\n"
+    message_text += "Seleziona un numero per prenotare:\n\n"
+    for i, slot in enumerate(slots):
+        try:
+            date_obj = datetime.strptime(slot["date"], "%Y-%m-%dT%H:%M:%SZ")
+            formatted_date = date_obj.strftime("%d/%m/%Y %H:%M")
+        except Exception:
+            formatted_date = slot["date"]
+        message_text += f"{i+1}. <b>{formatted_date}</b>\n"
+        message_text += f"   🏥 {slot['hospital']}\n"
+        message_text += f"   📍 {slot['address']}\n"
+        message_text += f"   💰 {slot['price']}€\n\n"
+
+    keyboard = []
+    current_row = []
+    for i in range(len(slots)):
+        current_row.append(InlineKeyboardButton(f"{i+1}", callback_data=f"slot_{i}"))
+        if len(current_row) == 5:
+            keyboard.append(current_row)
+            current_row = []
+    if current_row:
+        keyboard.append(current_row)
+    keyboard.append([InlineKeyboardButton("❌ Annulla", callback_data="cancel_slot")])
+
+    await loading.edit_text(
+        message_text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML"
+    )
+
+
 # SETUP HANDLERS
 # =============================================================================
 
@@ -4188,7 +4287,10 @@ def setup_handlers(application):
         pattern="^(toggle_monitor_|remove_monitor_|check_reports_now)"
     )
     application.add_handler(reports_monitoring_handler)
-    
+
+    # Handler per prenotazione rapida dalle notifiche di monitoraggio
+    application.add_handler(CallbackQueryHandler(handle_quickbook, pattern="^quickbook_"))
+
     # Gestore errori
     application.add_error_handler(error_handler)
     
