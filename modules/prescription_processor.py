@@ -619,12 +619,8 @@ def process_prescription(prescription, previous_data, chat_id=None):
                         logger.info(f"Prenotazione automatica riuscita per {prescription_key}!")
                         
                         # Formattare la data
-                        try:
-                            from datetime import datetime
-                            date_obj = datetime.strptime(result["appointment_date"], "%Y-%m-%dT%H:%M:%SZ")
-                            formatted_date = date_obj.strftime("%d/%m/%Y %H:%M")
-                        except:
-                            formatted_date = result["appointment_date"]
+                        from modules.data_utils import fmt_datetime
+                        formatted_date = fmt_datetime(result["appointment_date"])
                         
                         # Inviamo una notifica all'utente
                         booking_message = f"""

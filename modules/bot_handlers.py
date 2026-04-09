@@ -31,9 +31,10 @@ from config import (
 
 # Importiamo le funzioni da altri moduli
 from modules.data_utils import (
-    load_authorized_users, save_authorized_users, 
+    load_authorized_users, save_authorized_users,
     load_input_data, save_input_data,
-    load_previous_data, save_previous_data
+    load_previous_data, save_previous_data,
+    fmt_datetime
 )
 from modules.prescription_processor import process_prescription
 
@@ -2041,8 +2042,7 @@ async def list_prescriptions(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if has_booking:
             for booking in prescription.get("bookings", []):
                 try:
-                    date_obj = datetime.strptime(booking["date"], "%Y-%m-%dT%H:%M:%SZ")
-                    formatted_date = date_obj.strftime("%d/%m/%Y %H:%M")
+                    formatted_date = fmt_datetime(booking["date"])
                 except:
                     formatted_date = booking["date"]
                 
@@ -2378,8 +2378,7 @@ async def handle_booking_choice(update: Update, context: ContextTypes.DEFAULT_TY
         # Aggiungiamo le disponibilità al messaggio
         for i, slot in enumerate(slots):
             try:
-                date_obj = datetime.strptime(slot["date"], "%Y-%m-%dT%H:%M:%SZ")
-                formatted_date = date_obj.strftime("%d/%m/%Y %H:%M")
+                formatted_date = fmt_datetime(slot["date"])
             except Exception:
                 formatted_date = slot["date"]
                 
@@ -2518,8 +2517,7 @@ async def handle_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Aggiungiamo le disponibilità al messaggio
         for i, slot in enumerate(slots):
             try:
-                date_obj = datetime.strptime(slot["date"], "%Y-%m-%dT%H:%M:%SZ")
-                formatted_date = date_obj.strftime("%d/%m/%Y %H:%M")
+                formatted_date = fmt_datetime(slot["date"])
             except Exception:
                 formatted_date = slot["date"]
                 
@@ -2603,8 +2601,7 @@ async def handle_slot_choice(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     # Formattiamo la data
     try:
-        date_obj = datetime.strptime(selected_slot["date"], "%Y-%m-%dT%H:%M:%SZ")
-        formatted_date = date_obj.strftime("%d/%m/%Y %H:%M")
+        formatted_date = fmt_datetime(selected_slot["date"])
     except:
         formatted_date = selected_slot["date"]
     
@@ -2682,8 +2679,7 @@ async def confirm_booking(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if result["action"] == "booked":
         # Formattiamo la data
         try:
-            date_obj = datetime.strptime(result["appointment_date"], "%Y-%m-%dT%H:%M:%SZ")
-            formatted_date = date_obj.strftime("%d/%m/%Y %H:%M")
+            formatted_date = fmt_datetime(result["appointment_date"])
         except:
             formatted_date = result["appointment_date"]
         
@@ -2818,8 +2814,7 @@ async def list_bookings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for idx, booking in enumerate(all_bookings):
         # Formattiamo la data
         try:
-            date_obj = datetime.strptime(booking["date"], "%Y-%m-%dT%H:%M:%SZ")
-            formatted_date = date_obj.strftime("%d/%m/%Y %H:%M")
+            formatted_date = fmt_datetime(booking["date"])
         except:
             formatted_date = booking["date"]
         
@@ -2925,8 +2920,7 @@ async def start_cancel_booking(update: Update, context: ContextTypes.DEFAULT_TYP
     for idx, booking in enumerate(all_bookings):
         # Formattiamo la data
         try:
-            date_obj = datetime.strptime(booking["date"], "%Y-%m-%dT%H:%M:%SZ")
-            formatted_date = date_obj.strftime("%d/%m/%Y %H:%M")
+            formatted_date = fmt_datetime(booking["date"])
         except Exception as e:
             logger.error(f"Errore nella formattazione della data: {e}")
             formatted_date = booking["date"]
@@ -2988,8 +2982,7 @@ async def handle_booking_to_cancel(update: Update, context: ContextTypes.DEFAULT
         
         # Formattiamo la data
         try:
-            date_obj = datetime.strptime(booking_to_cancel["date"], "%Y-%m-%dT%H:%M:%SZ")
-            formatted_date = date_obj.strftime("%d/%m/%Y %H:%M")
+            formatted_date = fmt_datetime(booking_to_cancel["date"])
         except:
             formatted_date = booking_to_cancel["date"]
         
@@ -4097,8 +4090,7 @@ async def handle_quickbook(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_text += "Seleziona un numero per prenotare:\n\n"
     for i, slot in enumerate(slots):
         try:
-            date_obj = datetime.strptime(slot["date"], "%Y-%m-%dT%H:%M:%SZ")
-            formatted_date = date_obj.strftime("%d/%m/%Y %H:%M")
+            formatted_date = fmt_datetime(slot["date"])
         except Exception:
             formatted_date = slot["date"]
         message_text += f"{i+1}. <b>{formatted_date}</b>\n"
@@ -4149,8 +4141,7 @@ async def handle_quickslot_choice(update: Update, context: ContextTypes.DEFAULT_
 
     selected_slot = slots[slot_idx]
     try:
-        date_obj = datetime.strptime(selected_slot["date"], "%Y-%m-%dT%H:%M:%SZ")
-        formatted_date = date_obj.strftime("%d/%m/%Y %H:%M")
+        formatted_date = fmt_datetime(selected_slot["date"])
     except Exception:
         formatted_date = selected_slot["date"]
 
@@ -4218,8 +4209,7 @@ async def handle_quickbook_confirm(update: Update, context: ContextTypes.DEFAULT
         return
 
     try:
-        date_obj = datetime.strptime(result["appointment_date"], "%Y-%m-%dT%H:%M:%SZ")
-        formatted_date = date_obj.strftime("%d/%m/%Y %H:%M")
+        formatted_date = fmt_datetime(result["appointment_date"])
     except Exception:
         formatted_date = result["appointment_date"]
 

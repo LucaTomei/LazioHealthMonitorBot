@@ -1,6 +1,9 @@
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+_ROME = ZoneInfo("Europe/Rome")
 
 from config import logger, authorized_users
 from modules.database import get_connection, _lock
@@ -120,10 +123,24 @@ def save_previous_data(data):
         logger.error(f"Errore nel salvare i dati precedenti: {str(e)}")
 
 
-def format_date(date_string):
-    """Formatta la data ISO in un formato più leggibile."""
+def _parse_utc_to_rome(date_string):
+    """Parsa una stringa UTC ISO e la converte al fuso orario di Roma (CET/CEST)."""
+    dt = datetime.strptime(date_string, "%Y-%m-%dT%H:%M:%SZ")
+    return dt.replace(tzinfo=timezone.utc).astimezone(_ROME)
+
+
+def fmt_datetime(date_string):
+    """Restituisce la data nel formato DD/MM/YYYY HH:MM in ora italiana."""
     try:
-        dt = datetime.strptime(date_string, "%Y-%m-%dT%H:%M:%SZ")
+        return _parse_utc_to_rome(date_string).strftime("%d/%m/%Y %H:%M")
+    except Exception:
+        return date_string
+
+
+def format_date(date_string):
+    """Formatta la data ISO in un formato più leggibile (ora italiana)."""
+    try:
+        dt = _parse_utc_to_rome(date_string)
         weekdays = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato", "Domenica"]
         months = ["Gennaio", "Febbraio", "Marzo", "Aprile", "Maggio", "Giugno",
                   "Luglio", "Agosto", "Settembre", "Ottobre", "Novembre", "Dicembre"]
