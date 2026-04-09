@@ -2654,16 +2654,20 @@ async def confirm_booking(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Inviamo un messaggio di attesa
     await query.edit_message_text("🔄 Sto effettuando la prenotazione... Attendi un momento.")
-    
-    # Avviamo il processo di prenotazione
-    result = booking_workflow(
-        fiscal_code=prescription["fiscal_code"],
-        nre=prescription["nre"],
-        phone_number=phone,
-        email=email,
-        patient_id=booking_details.get("patient_id"),
-        process_id=booking_details.get("process_id"),
-        slot_choice=slot_idx
+
+    # Avviamo il processo di prenotazione (run_in_executor per non bloccare l'event loop)
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None,
+        lambda: booking_workflow(
+            fiscal_code=prescription["fiscal_code"],
+            nre=prescription["nre"],
+            phone_number=phone,
+            email=email,
+            patient_id=booking_details.get("patient_id"),
+            process_id=booking_details.get("process_id"),
+            slot_choice=slot_idx
+        )
     )
     
     if not result["success"]:
@@ -3051,13 +3055,14 @@ async def confirm_cancel_booking(update: Update, context: ContextTypes.DEFAULT_T
         
         # Inviamo un messaggio di attesa
         await query.edit_message_text("🔄 Sto disdendo la prenotazione... Attendi un momento.")
-        
+
         # Import qui per evitare import circolari
         from modules.booking_client import cancel_booking
-        
+
         try:
-            # Disdiciamo la prenotazione
-            result = cancel_booking(booking_id)
+            # Disdiciamo la prenotazione (run_in_executor per non bloccare l'event loop)
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, lambda: cancel_booking(booking_id))
             
             # Rimuoviamo la prenotazione dalle prescrizioni
             prescriptions = load_input_data()
@@ -4104,19 +4109,150 @@ async def handle_quickbook(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = []
     current_row = []
     for i in range(len(slots)):
-        current_row.append(InlineKeyboardButton(f"{i+1}", callback_data=f"slot_{i}"))
+        current_row.append(InlineKeyboardButton(f"{i+1}", callback_data=f"qslot_{i}"))
         if len(current_row) == 5:
             keyboard.append(current_row)
             current_row = []
     if current_row:
         keyboard.append(current_row)
-    keyboard.append([InlineKeyboardButton("❌ Annulla", callback_data="cancel_slot")])
+    keyboard.append([InlineKeyboardButton("❌ Annulla", callback_data="cancel_qslot")])
 
     await loading.edit_text(
         message_text,
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML"
     )
+
+
+async def handle_quickslot_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gestisce la selezione dello slot dal flusso quickbook (fuori dal ConversationHandler)."""
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    if query.data == "cancel_qslot":
+        await query.edit_message_text("❌ Operazione annullata.")
+        user_data.pop(user_id, None)
+        return
+
+    slot_idx = int(query.data.split("_")[1])
+    booking_details = user_data.get(user_id, {}).get("booking_details")
+    if not booking_details:
+        await query.edit_message_text("⚠️ Sessione scaduta. Riprova.")
+        return
+
+    slots = booking_details["slots"]
+    if slot_idx < 0 or slot_idx >= len(slots):
+        await query.edit_message_text("⚠️ Disponibilità non valida.")
+        user_data.pop(user_id, None)
+        return
+
+    selected_slot = slots[slot_idx]
+    try:
+        date_obj = datetime.strptime(selected_slot["date"], "%Y-%m-%dT%H:%M:%SZ")
+        formatted_date = date_obj.strftime("%d/%m/%Y %H:%M")
+    except Exception:
+        formatted_date = selected_slot["date"]
+
+    await query.edit_message_text(
+        f"📅 <b>Conferma Prenotazione</b>\n\n"
+        f"Stai per prenotare:\n"
+        f"<b>Servizio:</b> {booking_details['service']}\n"
+        f"<b>Data:</b> {formatted_date}\n"
+        f"<b>Ospedale:</b> {selected_slot['hospital']}\n"
+        f"<b>Indirizzo:</b> {selected_slot['address']}\n"
+        f"<b>Prezzo:</b> {selected_slot['price']}€\n\n"
+        f"Confermi la prenotazione?",
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Sì, prenota", callback_data=f"confirm_qslot_{slot_idx}"),
+                InlineKeyboardButton("❌ No, annulla", callback_data="cancel_qslot")
+            ]
+        ]),
+        parse_mode="HTML"
+    )
+
+
+async def handle_quickbook_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Conferma ed esegue la prenotazione dal flusso quickbook."""
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    if query.data == "cancel_qslot":
+        await query.edit_message_text("❌ Operazione annullata.")
+        user_data.pop(user_id, None)
+        return
+
+    slot_idx = int(query.data.split("_")[2])
+    session = user_data.get(user_id)
+    if not session:
+        await query.edit_message_text("⚠️ Sessione scaduta. Riprova.")
+        return
+
+    prescription = session["selected_prescription"]
+    booking_details = session["booking_details"]
+
+    await query.edit_message_text("🔄 Sto effettuando la prenotazione... Attendi un momento.")
+
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None,
+        lambda: booking_workflow(
+            fiscal_code=prescription["fiscal_code"],
+            nre=prescription["nre"],
+            phone_number=session["phone"],
+            email=session["email"],
+            patient_id=booking_details.get("patient_id"),
+            process_id=booking_details.get("process_id"),
+            slot_choice=slot_idx
+        )
+    )
+
+    user_data.pop(user_id, None)
+
+    if not result.get("success") or result.get("action") != "booked":
+        await query.edit_message_text(
+            f"❌ Errore nella prenotazione: {result.get('message', 'Errore sconosciuto')}"
+        )
+        return
+
+    try:
+        date_obj = datetime.strptime(result["appointment_date"], "%Y-%m-%dT%H:%M:%SZ")
+        formatted_date = date_obj.strftime("%d/%m/%Y %H:%M")
+    except Exception:
+        formatted_date = result["appointment_date"]
+
+    await query.edit_message_text(
+        f"✅ <b>Prenotazione effettuata con successo!</b>\n\n"
+        f"<b>Servizio:</b> {result['service']}\n"
+        f"<b>Data:</b> {formatted_date}\n"
+        f"<b>Ospedale:</b> {result['hospital']}\n"
+        f"<b>Indirizzo:</b> {result['address']}\n"
+        f"<b>ID Prenotazione:</b> {result['booking_id']}\n\n"
+        f"Ti invio il documento di prenotazione.",
+        parse_mode="HTML"
+    )
+
+    await context.bot.send_document(
+        chat_id=user_id,
+        document=BytesIO(result["pdf_content"]),
+        filename=f"prenotazione_{result['booking_id']}.pdf",
+        caption=f"Documento di prenotazione per {result['service']} del {formatted_date}"
+    )
+
+    prescriptions = load_input_data()
+    for p in prescriptions:
+        if p["fiscal_code"] == prescription["fiscal_code"] and p["nre"] == prescription["nre"]:
+            p.setdefault("bookings", []).append({
+                "booking_id": result["booking_id"],
+                "date": result["appointment_date"],
+                "hospital": result["hospital"],
+                "address": result["address"],
+                "service": result["service"]
+            })
+            break
+    save_input_data(prescriptions)
 
 
 # SETUP HANDLERS
@@ -4290,6 +4426,9 @@ def setup_handlers(application):
 
     # Handler per prenotazione rapida dalle notifiche di monitoraggio
     application.add_handler(CallbackQueryHandler(handle_quickbook, pattern="^quickbook_"))
+    application.add_handler(CallbackQueryHandler(handle_quickslot_choice, pattern="^qslot_\\d+$"))
+    application.add_handler(CallbackQueryHandler(handle_quickslot_choice, pattern="^cancel_qslot$"))
+    application.add_handler(CallbackQueryHandler(handle_quickbook_confirm, pattern="^confirm_qslot_\\d+$"))
 
     # Gestore errori
     application.add_error_handler(error_handler)
