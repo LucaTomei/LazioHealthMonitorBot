@@ -46,7 +46,7 @@ def book_appointment(process_id, data_prenotazione, diary_id, service_cur, nre, 
         "diaryId": diary_id,
         "requestId": "A0",
         "supplyModeId": "A",
-        "extraServices": [],
+        "extraServices": None,  # API expects null, not []
         "serviceCur": service_cur,
         "exemptionId": "NE00",
         "priority": "P",
@@ -54,17 +54,24 @@ def book_appointment(process_id, data_prenotazione, diary_id, service_cur, nre, 
         "processId": process_id,
         "personIdentifier": fiscal_code
     }
-    
+
     response = requests.post(url, headers=headers, json=payload, verify=False)
-    
-    # More detailed logging for debugging
     logger.info(f"Pre-booking Status Code: {response.status_code}")
-    
-    if response.status_code != 201:  # The API returns 201 Created for successful prebookings
+
+    if response.status_code == 201:
+        return response.json()
+    elif response.status_code == 204:
+        # Slot already locked; retry to obtain a fresh lock ID
+        logger.info("Pre-booking returned 204 (existing lock), retrying...")
+        response = requests.post(url, headers=headers, json=payload, verify=False, timeout=15)
+        logger.info(f"Pre-booking retry Status Code: {response.status_code}")
+        if response.status_code == 201:
+            return response.json()
+        logger.error(f"Pre-booking retry Error Response: {response.text}")
+        raise Exception(f"Pre-booking failed with status code {response.status_code}")
+    else:
         logger.error(f"Pre-booking Error Response: {response.text}")
         raise Exception(f"Pre-booking failed with status code {response.status_code}")
-    
-    return response.json()
 
 def complete_booking(fiscal_code, process_id, nre, phone_number, email, lock_id, order_id, data_prenotazione, diary_id):
     """
