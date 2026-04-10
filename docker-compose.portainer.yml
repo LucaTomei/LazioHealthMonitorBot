@@ -1,0 +1,22 @@
+services:
+  laziobot:
+    image: ghcr.io/lucatomei/laziohealthmonitorbot:latest
+    container_name: laziobot
+    restart: unless-stopped
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TZ=${TZ}
+      - LOG_LEVEL=${LOG_LEVEL}
+      - GEOAPIFY_API_KEY=${GEOAPIFY_API_KEY}
+      - DB_FILE=${DB_FILE}
+    volumes:
+      - /opt/docker/laziobot/logs:/app/logs
+      - /opt/docker/laziobot/data:/app/data
+      - /opt/docker/laziobot/reports_pdf:/app/reports_pdf
+      - /opt/docker/laziobot/prenotazioni_pdf:/app/prenotazioni_pdf
+      - /opt/docker/laziobot/debug_responses:/app/debug_responses
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
