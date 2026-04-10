@@ -446,6 +446,10 @@ def process_prescription(prescription, previous_data, chat_id=None):
         error_msg = f"Impossibile verificare la prescrizione {nre}"
         logger.error(error_msg)
         return False, error_msg
+    if check_prescription_result.get("_not_found"):
+        # 404: prescrizione non disponibile (potrebbe essere già prenotata o problema temporaneo server)
+        logger.warning(f"Prescrizione {nre} non disponibile (404) — skip ciclo")
+        return False, f"Prescrizione {nre} non disponibile al momento"
 
     # Se content è False, la prescrizione non è prenotabile online
     if check_prescription_result.get('content') is False:
