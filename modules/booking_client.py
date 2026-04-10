@@ -271,6 +271,8 @@ def booking_workflow(fiscal_code, nre, phone_number, email, patient_id=None, pro
         check_prescription_result = check_prescription(patient_id, nre)
         if not check_prescription_result:
             return {"success": False, "message": f"Impossibile verificare la prescrizione {nre}"}
+        if check_prescription_result.get("_not_found"):
+            return {"success": False, "message": "Questa prescrizione risulta già prenotata o non più prenotabile online"}
         logger.info("Prescription Checked")
         
         # Step 4: Get prescription details

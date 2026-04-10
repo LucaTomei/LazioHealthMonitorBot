@@ -323,6 +323,9 @@ def check_prescription(patient_id, nre):
     
     try:
         response = requests.get(url, headers=headers, params=params, timeout=20)
+        if response.status_code == 404:
+            logger.warning(f"Prescrizione {nre} non trovata (404) — già prenotata o non più prenotabile")
+            return {"_not_found": True}
         response.raise_for_status()
         return response.json()
     except Exception as e:
