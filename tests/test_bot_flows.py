@@ -727,6 +727,68 @@ class ApiMessagesTests(BotTestCase):
         self.assertEqual(api_message({"_not_found": True, "_messages": []}), "")
         self.assertEqual(api_message(None), "")
 
+    async def test_api_message_priority_and_encoding(self):
+        from modules.api_client import api_message
+        # check-prescription: codice nel campo "code"
+        check = {"content": False, "_messages": [{"code": "INVALID_PRESCRIPTION_PRIORITY", "text": "A - altro"}]}
+        # availabilities: codice e testo invertiti
+        avail = {"_messages": [{"code": "A - altro", "text": "INVALID_PRESCRIPTION_PRIORITY"}]}
+        for result in (check, avail):
+            message = api_message(result)
+            self.assertIn("«A - altro»", message)
+            self.assertIn("ReCUP", message)
+        # Sequenza reale restituita dal server: "à" codificata due volte (Ã + NBSP)
+        broken = {"_messages": [{"text": "E - Tipo operazione gi\u00c3\u00a0 utilizzato. Ricetta gi\u00c3\u00a0 presa in carico"}]}
+        self.assertEqual(api_message(broken), "Tipo operazione già utilizzato. Ricetta già presa in carico")
+
+    async def test_not_bookable_status_notified_once_and_listed(self):
+        self.add_prescription_row()
+        sent = []
+        patches = MonitoringTests._patch_api(self, [])
+        patches[3] = mock.patch.object(prescription_processor, "check_prescription", return_value={
+            "content": False, "_messages": [{"code": "INVALID_PRESCRIPTION_PRIORITY", "text": "A - altro"}]})
+        for patch in patches:
+            patch.start()
+        try:
+            with mock.patch.object(prescription_processor, "send_message_sync",
+                                   side_effect=lambda chat, text, reply_markup=None: sent.append(text) or True):
+                for _ in range(3):
+                    current = data_utils.get_prescription(CF, NRE)
+                    ok, message = prescription_processor.process_prescription(current, {})
+        finally:
+            for patch in patches:
+                patch.stop()
+        self.assertFalse(ok)
+        self.assertEqual(len(sent), 1)
+        self.assertIn("A - altro", sent[0])
+        stored = data_utils.get_prescription(CF, NRE)
+        self.assertIn("A - altro", stored["status_message"])
+        self.assertEqual(stored["description"], "VISITA <X>")
+        await self.send(USER, "📋 Lista Prescrizioni")
+        self.assertIn("Non prenotabile online", self.tg.last_text())
+
+    async def test_status_cleared_when_bookable_again(self):
+        self.add_prescription_row(status_message="ricetta scaduta")
+        patches = MonitoringTests._patch_api(self, [])
+        for patch in patches:
+            patch.start()
+        try:
+            prescription_processor.process_prescription(data_utils.get_prescription(CF, NRE), {})
+        finally:
+            for patch in patches:
+                patch.stop()
+        self.assertIsNone(data_utils.get_prescription(CF, NRE)["status_message"])
+
+    async def test_add_flow_does_not_send_duplicate_status_message(self):
+        with mock.patch.object(bot_handlers, "process_prescription", return_value=(False, "motivo")) as proc:
+            await self.send(USER, "➕ Aggiungi Prescrizione")
+            await self.send(USER, CF)
+            await self.send(USER, NRE)
+            await self.send(USER, "3331234567")
+            await self.send(USER, "a@b.it")
+            await self.click(USER, "confirm_add")
+        self.assertIs(proc.call_args.args[3], False)
+
     async def test_expired_prescription_reason_shown(self):
         p = self.add_prescription_row()
         patches = MonitoringTests._patch_api(self, [])

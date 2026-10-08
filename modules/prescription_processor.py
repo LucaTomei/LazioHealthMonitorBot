@@ -331,6 +331,45 @@ def _save_debug(nre, kind, data):
         logger.warning(f"Impossibile salvare la risposta di diagnostica: {e}")
 
 
+def _record_status(prescription, telegram_chat_id, reason, notify):
+    """
+    Memorizza il motivo per cui la Regione non permette di prenotare la ricetta
+    (scaduta, già presa in carico, priorità non prenotabile online...) e avvisa
+    l'utente una sola volta per ogni nuovo motivo. reason=None azzera lo stato.
+    """
+    fiscal_code, nre = prescription["fiscal_code"], prescription["nre"]
+    previous = prescription.get("status_message")
+    if previous == reason:
+        return
+    prescription["status_message"] = reason
+    try:
+        update_prescription(fiscal_code, nre, lambda p: p.__setitem__("status_message", reason))
+    except Exception as e:
+        logger.warning(f"Impossibile salvare lo stato della prescrizione: {e}")
+
+    if reason and notify and prescription.get("notifications_enabled", True) and telegram_chat_id:
+        description = prescription.get("description") or f"Prescrizione {nre}"
+        send_message_sync(
+            telegram_chat_id,
+            f"ℹ️ <b>{esc(description)}</b>\n"
+            f"NRE: <code>{esc(nre)}</code>\n\n"
+            f"⚠️ Al momento non è prenotabile online.\nMotivo: {esc(reason)}.\n\n"
+            "Il bot continuerà a controllarla e ti avviserà se diventa prenotabile."
+        )
+
+
+def _update_description(prescription, patient_id, nre):
+    """Legge il nome della prestazione anche quando la ricetta non è prenotabile."""
+    try:
+        details = get_prescription_details(patient_id, nre)
+        name = ((details or {}).get("details") or [{}])[0].get("service", {}).get("description")
+        if name and prescription.get("description") != name:
+            prescription["description"] = name
+            update_prescription(prescription["fiscal_code"], nre, lambda p: p.__setitem__("description", name))
+    except Exception as e:
+        logger.warning(f"Impossibile leggere la descrizione della prescrizione: {e}")
+
+
 def is_prescription_already_booked(prescription):
     """Verifica se una prescrizione ha già prenotazioni attive."""
     return bool(prescription.get("bookings"))
@@ -456,7 +495,7 @@ def _auto_book(prescription, telegram_chat_id, fiscal_code, nre, patient_id, pro
         )
 
 
-def process_prescription(prescription, previous_data, chat_id=None):
+def process_prescription(prescription, previous_data, chat_id=None, notify_status=True):
     """Process a single prescription and check for availability changes."""
     fiscal_code = prescription["fiscal_code"]
     nre = prescription["nre"]
@@ -523,13 +562,18 @@ def process_prescription(prescription, previous_data, chat_id=None):
         # 404: la Regione indica il motivo (es. ricetta scaduta), altrimenti può essere temporaneo
         reason = api_message(check_prescription_result)
         logger.warning(f"Prescrizione {nre} non disponibile (404) — skip ciclo")
-        return False, reason or f"Prescrizione {nre} non disponibile al momento"
+        if reason:
+            _record_status(prescription, telegram_chat_id, reason, notify_status)
+            return False, reason
+        return False, f"Prescrizione {nre} non disponibile al momento"
 
     # Se content è False, la prescrizione non è prenotabile dall'app
     if check_prescription_result.get('content') is False:
         _save_debug(nre, "check", check_prescription_result)
+        _update_description(prescription, patient_id, nre)
         error_msg = api_message(check_prescription_result) or f"La prescrizione {nre} non è prenotabile online"
         logger.warning(f"Prescrizione non prenotabile online: {error_msg}")
+        _record_status(prescription, telegram_chat_id, error_msg, notify_status)
         return False, error_msg
 
     # Step 6: Get prescription details
@@ -567,7 +611,14 @@ def process_prescription(prescription, previous_data, chat_id=None):
         return False, error_msg
     if availabilities.get("_already_booked"):
         logger.warning(f"Prescrizione NRE {nre} non più prenotabile (400), salto")
+        reason = api_message(availabilities)
+        if reason:
+            _record_status(prescription, telegram_chat_id, reason, notify_status)
+            return False, reason
         return True, prescription.get("description", "Prescrizione non più attiva")
+
+    # La ricetta è di nuovo prenotabile: azzeriamo un eventuale stato precedente
+    _record_status(prescription, telegram_chat_id, None, False)
 
     current_availabilities = availabilities['content'] or []
 

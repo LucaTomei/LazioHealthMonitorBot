@@ -516,7 +516,8 @@ async def confirm_add_prescription(update: Update, context: ContextTypes.DEFAULT
     prescription_key = f"{fiscal_code}_{nre}"
     previous_data = {}
     try:
-        success, message = await run_blocking(process_prescription, new_prescription, previous_data, user_id)
+        # notify_status=False: l'esito viene mostrato qui sotto, senza un secondo messaggio
+        success, message = await run_blocking(process_prescription, new_prescription, previous_data, user_id, False)
     except Exception as e:
         logger.error(f"Errore nella verifica iniziale della prescrizione: {str(e)}")
         success, message = False, "verifica temporaneamente non riuscita"
@@ -655,6 +656,8 @@ async def list_prescriptions(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         message += f"{idx+1}. <b>{esc(_description(prescription, 'Prescrizione sconosciuta'))}</b>{user_info}\n"
         message += f"   Stato: {'📑 Prenotata' if has_booking else '🔍 In monitoraggio'}\n"
+        if prescription.get("status_message") and not has_booking:
+            message += f"   ⚠️ Non prenotabile online — {esc(prescription['status_message'])}\n"
         message += f"   Codice Fiscale: <code>{esc(prescription['fiscal_code'])}</code>\n"
         message += f"   NRE: <code>{esc(prescription['nre'])}</code>\n"
         if team_card_code and team_card_code != "N/A":

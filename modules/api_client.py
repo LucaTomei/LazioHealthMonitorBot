@@ -107,11 +107,33 @@ def get_doctor_info(fiscal_code):
         logger.error(f"Errore nell'ottenere le informazioni del medico: {str(e).replace(fiscal_code, fiscal_code[:6] + '**********')}")
         return None
 
+def _fix_encoding(text):
+    """Il server a volte restituisce testo UTF-8 codificato due volte (es. "giÃ " invece di "già")."""
+    try:
+        return text.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return text
+
+
 def api_message(result):
-    """Primo messaggio testuale restituito dalle API RecUP (es. "ricetta scaduta"), senza prefisso di livello."""
+    """
+    Motivo leggibile del primo messaggio restituito dalle API RecUP
+    (es. "ricetta scaduta"), oppure stringa vuota.
+    """
     messages = (result or {}).get("_messages") or []
-    text = (messages[0].get("text") or "").strip() if messages else ""
-    if len(text) > 4 and text[1:4] == " - ":
+    if not messages:
+        return ""
+    code = _fix_encoding(str(messages[0].get("code") or "").strip())
+    text = _fix_encoding(str(messages[0].get("text") or "").strip())
+
+    # A seconda dell'endpoint il codice errore può trovarsi nel campo "text" e viceversa
+    if "INVALID_PRESCRIPTION_PRIORITY" in (code, text):
+        priority = text if code == "INVALID_PRESCRIPTION_PRIORITY" else code
+        return (f"priorità «{priority}», che la Regione non permette di prenotare online. "
+                "Puoi prenotarla tramite ReCUP (06 9939), in farmacia o allo sportello CUP")
+
+    # Prefisso del livello di errore (es. "E - ...")
+    if len(text) > 4 and text[0] in "EWI" and text[1:4] == " - ":
         text = text[4:]
     return text
 
@@ -203,8 +225,13 @@ def get_availabilities(patient_id, process_id, nre, order_ids):
     try:
         response = requests.get(url, headers=headers, params=params, timeout=20)
         if response.status_code == 400:
-            logger.warning(f"Disponibilità non recuperabili per {nre} (400) — prescrizione probabilmente già prenotata o non più attiva")
-            return {"content": [], "_already_booked": True}
+            try:
+                messages = response.json().get("_messages") or []
+            except ValueError:
+                messages = []
+            result = {"content": [], "_already_booked": True, "_messages": messages}
+            logger.warning(f"Disponibilità non recuperabili per {nre} (400): {api_message(result) or 'nessun dettaglio'}")
+            return result
         response.raise_for_status()
         return response.json()
     except Exception as e:

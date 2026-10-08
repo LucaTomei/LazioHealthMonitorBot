@@ -246,6 +246,9 @@ def booking_workflow(fiscal_code, nre, phone_number, email, patient_id=None, pro
         if not availabilities or 'content' not in availabilities:
             return {"success": False, "message": f"Impossibile ottenere le disponibilità per {nre}"}
         if availabilities.get("_already_booked"):
+            reason = api_message(availabilities)
+            if reason:
+                return {"success": False, "message": f"Prescrizione non prenotabile: {reason}"}
             return {"success": False, "message": "Questa prescrizione risulta già prenotata o non più prenotabile online"}
 
         all_slots = availabilities['content'] or []
