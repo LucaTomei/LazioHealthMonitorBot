@@ -107,6 +107,15 @@ def get_doctor_info(fiscal_code):
         logger.error(f"Errore nell'ottenere le informazioni del medico: {str(e).replace(fiscal_code, fiscal_code[:6] + '**********')}")
         return None
 
+def api_message(result):
+    """Primo messaggio testuale restituito dalle API RecUP (es. "ricetta scaduta"), senza prefisso di livello."""
+    messages = (result or {}).get("_messages") or []
+    text = (messages[0].get("text") or "").strip() if messages else ""
+    if len(text) > 4 and text[1:4] == " - ":
+        text = text[4:]
+    return text
+
+
 def check_prescription(patient_id, nre):
     """Check prescription details."""
     url = f"{BASE_URL}/api/v3/experience-apis/citizens/prescriptions/check-prescription"
@@ -129,8 +138,13 @@ def check_prescription(patient_id, nre):
     try:
         response = requests.get(url, headers=headers, params=params, timeout=20)
         if response.status_code == 404:
-            logger.warning(f"Prescrizione {nre} non trovata (404) — già prenotata o non più prenotabile")
-            return {"_not_found": True}
+            try:
+                messages = response.json().get("_messages") or []
+            except ValueError:
+                messages = []
+            result = {"_not_found": True, "_messages": messages}
+            logger.warning(f"Prescrizione {nre} non disponibile (404): {api_message(result) or 'nessun dettaglio'}")
+            return result
         response.raise_for_status()
         return response.json()
     except Exception as e:

@@ -76,6 +76,8 @@ logger.info("Token Telegram caricato correttamente")
 # Percorsi dei file - Configurabili via env
 PDF_FOLDER = _env("PDF_FOLDER", "prenotazioni_pdf")
 REPORTS_FOLDER = _env("REPORTS_FOLDER", "reports_pdf")
+# Risposte grezze delle API salvate per diagnosticare ricette particolari
+DEBUG_FOLDER = _env("DEBUG_FOLDER", "debug_responses")
 
 # Percorsi file JSON — mantenuti per la migrazione automatica a SQLite
 REPORTS_MONITORING_FILE = _env("REPORTS_MONITORING_FILE", "reports_monitoring.json")

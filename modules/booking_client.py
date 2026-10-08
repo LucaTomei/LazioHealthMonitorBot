@@ -196,7 +196,7 @@ def booking_workflow(fiscal_code, nre, phone_number, email, patient_id=None, pro
     """
     from modules.api_client import (
         get_patient_info, get_doctor_info, check_prescription,
-        get_prescription_details, get_availabilities
+        get_prescription_details, get_availabilities, api_message
     )
     from modules.data_utils import get_prescription, is_date_within_range
 
@@ -220,6 +220,9 @@ def booking_workflow(fiscal_code, nre, phone_number, email, patient_id=None, pro
         if not check_prescription_result:
             return {"success": False, "message": f"Impossibile verificare la prescrizione {nre}"}
         if check_prescription_result.get("_not_found"):
+            reason = api_message(check_prescription_result)
+            if reason:
+                return {"success": False, "message": f"Prescrizione non prenotabile: {reason}"}
             return {"success": False, "message": "Prescrizione non disponibile al momento (già prenotata o problema temporaneo dei server RecUP). Riprova più tardi."}
         logger.info("Prescription Checked")
 
@@ -232,6 +235,11 @@ def booking_workflow(fiscal_code, nre, phone_number, email, patient_id=None, pro
         order_ids = service.get('id')
         service_cur = service.get('code')
         service_name = service.get('description') or 'Servizio non specificato'
+        # Le API dell'app gestiscono una prestazione per volta: le altre vengono segnalate
+        other_services = [
+            (d.get('service') or {}).get('description') or 'Prestazione'
+            for d in prescription_details['details'][1:]
+        ]
 
         # Step 5: Get availabilities
         availabilities = get_availabilities(patient_id, process_id, nre, order_ids)
@@ -283,6 +291,7 @@ def booking_workflow(fiscal_code, nre, phone_number, email, patient_id=None, pro
                 "action": "list_slots",
                 "service": service_name,
                 "slots": slot_info,
+                "other_services": other_services,
                 "patient_id": patient_id,
                 "process_id": process_id
             }

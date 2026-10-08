@@ -19,6 +19,7 @@ os.environ.update({
     "LOG_FOLDER": os.path.join(TMP, "logs"),
     "PDF_FOLDER": os.path.join(TMP, "pdf"),
     "REPORTS_FOLDER": os.path.join(TMP, "reports"),
+    "DEBUG_FOLDER": os.path.join(TMP, "debug"),
     "INPUT_FILE": os.path.join(TMP, "none.json"),
     "PREVIOUS_DATA_FILE": os.path.join(TMP, "none.json"),
     "USERS_FILE": os.path.join(TMP, "none.json"),
@@ -716,6 +717,51 @@ class MonitoringTests(BotTestCase):
         prescription_processor.compare_availabilities([avail("2030-01-01T08:00:00Z")],
                                                       [avail("2030-01-02T08:00:00Z")], CF, NRE, "X", "", config_before)
         self.assertEqual(config_before, {"months_limit": None})
+
+
+class ApiMessagesTests(BotTestCase):
+    async def test_api_message_strips_level_prefix(self):
+        from modules.api_client import api_message
+        self.assertEqual(api_message({"_messages": [{"text": "E - Visualizzazione non consentita - ricetta scaduta"}]}),
+                         "Visualizzazione non consentita - ricetta scaduta")
+        self.assertEqual(api_message({"_not_found": True, "_messages": []}), "")
+        self.assertEqual(api_message(None), "")
+
+    async def test_expired_prescription_reason_shown(self):
+        p = self.add_prescription_row()
+        patches = MonitoringTests._patch_api(self, [])
+        patches[3] = mock.patch.object(prescription_processor, "check_prescription", return_value={
+            "_not_found": True, "_messages": [{"code": "404", "text": "E - Visualizzazione non consentita - ricetta scaduta"}]})
+        for patch in patches:
+            patch.start()
+        try:
+            ok, message = prescription_processor.process_prescription(p, {})
+        finally:
+            for patch in patches:
+                patch.stop()
+        self.assertFalse(ok)
+        self.assertIn("ricetta scaduta", message)
+
+    async def test_multi_service_prescription_notice_and_debug_dump(self):
+        p = self.add_prescription_row()
+        patches = MonitoringTests._patch_api(self, [avail("2030-01-01T08:00:00Z")])
+        patches[4] = mock.patch.object(prescription_processor, "get_prescription_details", return_value={"details": [
+            {"service": {"id": "S1", "description": "VISITA ALLERGOLOGICA"}},
+            {"service": {"id": "S2", "description": "PRICK TEST <18>"}},
+        ]})
+        sent = []
+        for patch in patches:
+            patch.start()
+        try:
+            with mock.patch.object(prescription_processor, "send_message_sync",
+                                   side_effect=lambda chat, text, reply_markup=None: sent.append(text) or True):
+                prescription_processor.process_prescription(p, {})
+        finally:
+            for patch in patches:
+                patch.stop()
+        self.assertIn("contiene 2 prestazioni", sent[0])
+        self.assertIn("PRICK TEST &lt;18&gt;", sent[0])
+        self.assertTrue(os.path.exists(os.path.join(os.environ["DEBUG_FOLDER"], f"{NRE}_details.json")))
 
 
 class ReviewFixesTests(BotTestCase):

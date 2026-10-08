@@ -1,9 +1,12 @@
-from config import logger
+import json
+import os
+
+from config import logger, DEBUG_FOLDER
 
 from modules.api_client import (
     get_access_token, update_device_token, get_patient_info,
     get_doctor_info, check_prescription, get_prescription_details,
-    get_availabilities
+    get_availabilities, api_message
 )
 from modules.data_utils import (
     update_prescription, is_date_within_range,
@@ -315,6 +318,19 @@ def compare_availabilities(previous, current, fiscal_code, nre, prescription_nam
     
     return None
 
+def _save_debug(nre, kind, data):
+    """Salva una volta sola la risposta grezza delle API per una ricetta (diagnostica)."""
+    try:
+        os.makedirs(DEBUG_FOLDER, exist_ok=True)
+        path = os.path.join(DEBUG_FOLDER, f"{nre}_{kind}.json")
+        if not os.path.exists(path):
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=1)
+            logger.info(f"Risposta API salvata per diagnostica: {path}")
+    except Exception as e:
+        logger.warning(f"Impossibile salvare la risposta di diagnostica: {e}")
+
+
 def is_prescription_already_booked(prescription):
     """Verifica se una prescrizione ha già prenotazioni attive."""
     return bool(prescription.get("bookings"))
@@ -504,15 +520,15 @@ def process_prescription(prescription, previous_data, chat_id=None):
         logger.error(error_msg)
         return False, error_msg
     if check_prescription_result.get("_not_found"):
-        # 404: prescrizione non disponibile (potrebbe essere già prenotata o problema temporaneo server)
+        # 404: la Regione indica il motivo (es. ricetta scaduta), altrimenti può essere temporaneo
+        reason = api_message(check_prescription_result)
         logger.warning(f"Prescrizione {nre} non disponibile (404) — skip ciclo")
-        return False, f"Prescrizione {nre} non disponibile al momento"
+        return False, reason or f"Prescrizione {nre} non disponibile al momento"
 
-    # Se content è False, la prescrizione non è prenotabile online
+    # Se content è False, la prescrizione non è prenotabile dall'app
     if check_prescription_result.get('content') is False:
-        messages = check_prescription_result.get('_messages') or []
-        api_msg = messages[0].get('text', '') if messages else ''
-        error_msg = api_msg if api_msg else f"La prescrizione {nre} non è prenotabile online"
+        _save_debug(nre, "check", check_prescription_result)
+        error_msg = api_message(check_prescription_result) or f"La prescrizione {nre} non è prenotabile online"
         logger.warning(f"Prescrizione non prenotabile online: {error_msg}")
         return False, error_msg
 
@@ -526,6 +542,14 @@ def process_prescription(prescription, previous_data, chat_id=None):
     service = prescription_details['details'][0].get('service') or {}
     order_ids = service.get('id')
     prescription_name = service.get('description') or "Prescrizione sconosciuta"
+
+    # Ricette con più prestazioni: le API dell'app ne gestiscono una per volta
+    other_services = [
+        (d.get('service') or {}).get('description') or 'Prestazione'
+        for d in prescription_details['details'][1:]
+    ]
+    if other_services:
+        _save_debug(nre, "details", prescription_details)
 
     # Aggiorniamo il nome della prescrizione nei dati
     if prescription.get("description") != prescription_name:
@@ -567,6 +591,14 @@ def process_prescription(prescription, previous_data, chat_id=None):
         cf_code,
         config
     )
+
+    if changes_message and other_services:
+        changes_message += (
+            f"\n⚠️ <b>Questa ricetta contiene {len(other_services) + 1} prestazioni.</b> "
+            "Il bot monitora e prenota solo la prima; per prenotarle tutte insieme usa "
+            "Prenota Smart sul sito della Regione.\n"
+            "Altre prestazioni: " + ", ".join(esc(s) for s in other_services) + "\n"
+        )
 
     if changes_message:
         logger.info(f"Rilevati cambiamenti significativi per NRE {nre}")

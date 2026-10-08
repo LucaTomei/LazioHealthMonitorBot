@@ -862,10 +862,12 @@ async def _show_slots(user_id, session, edit, send_new):
         await send_new("Cosa vuoi fare?", _main_keyboard(user_id))
         return ConversationHandler.END
 
-    text, shown = _format_slots(
-        result.get("service", "Prestazione"), result["slots"],
-        "Seleziona un numero per prenotare lo slot corrispondente:"
-    )
+    intro = "Seleziona un numero per prenotare lo slot corrispondente:"
+    if result.get("other_services"):
+        intro = (f"⚠️ La ricetta contiene anche: {esc(', '.join(result['other_services']))}. "
+                 "Qui viene prenotata solo la prima prestazione; per prenotarle tutte insieme usa "
+                 "Prenota Smart sul sito della Regione.\n\n" + intro)
+    text, shown = _format_slots(result.get("service", "Prestazione"), result["slots"], intro)
     result["slots"] = shown
     session["booking_details"] = result
     await edit(text, _slot_keyboard(len(shown), "slot_", "cancel_slot"))
