@@ -44,6 +44,9 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # "latest" solo dal branch principale: un tag di versione non deve sovrascriverlo
+          flavor: |
+            latest=false
           tags: |
             type=ref,event=branch
             type=ref,event=pr
