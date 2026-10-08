@@ -10,10 +10,8 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Install system dependencies including gosu for user switching
+# Install gosu for user switching
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    g++ \
     gosu \
     && rm -rf /var/lib/apt/lists/*
 
@@ -37,9 +35,9 @@ RUN mkdir -p logs data debug_responses reports_pdf prenotazioni_pdf
 RUN useradd -m -u 1000 botuser && \
     chown -R botuser:botuser /app
 
-# Health check (runs as root, checks if Python works)
-HEALTHCHECK --interval=60s --timeout=10s --start-period=40s --retries=3 \
-    CMD gosu botuser python -c "import sys; sys.exit(0)" || exit 1
+# Health check: il processo di monitoraggio aggiorna data/heartbeat a ogni ciclo completato
+HEALTHCHECK --interval=60s --timeout=10s --start-period=15m --retries=3 \
+    CMD python -c "import os,sys,time; d=os.path.dirname(os.path.abspath(os.getenv('DB_FILE') or 'data/recup_monitor.db')); f=os.path.join(d,'heartbeat'); i=int(os.getenv('CHECK_INTERVAL') or 300); sys.exit(0 if os.path.exists(f) and time.time()-os.path.getmtime(f) < 3*i+900 else 1)"
 
 # Entrypoint handles permission fixes and user switching
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

@@ -7,12 +7,19 @@ from dotenv import load_dotenv
 # Carica le variabili d'ambiente dal file .env
 load_dotenv()
 
+
+def _env(name, default=None):
+    """Legge una variabile d'ambiente; se assente o vuota usa il default."""
+    value = os.getenv(name)
+    return value if value not in (None, "") else default
+
+
 # Configurazione del logging
-log_folder = os.getenv("LOG_FOLDER", "logs")
+log_folder = _env("LOG_FOLDER", "logs")
 os.makedirs(log_folder, exist_ok=True)
 
 # Imposta il livello di logging dalla variabile d'ambiente
-log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+log_level = _env("LOG_LEVEL", "INFO").upper()
 log_level_map = {
     "DEBUG": logging.DEBUG,
     "INFO": logging.INFO,
@@ -37,50 +44,62 @@ logging.basicConfig(
 logger = logging.getLogger("RecupMonitor")
 
 # Log info sul server (utile per multi-server setup)
-SERVER_NAME = os.getenv("SERVER_NAME", "server1")
+SERVER_NAME = _env("SERVER_NAME", "server1")
 logger.info(f"Inizializzazione bot su server: {SERVER_NAME}")
 
 # Base configuration - Usa variabili d'ambiente con fallback
-BASE_URL = os.getenv("BASE_URL", "https://recup-webapi-appmobile.regione.lazio.it")
-AUTH_HEADER = os.getenv("AUTH_HEADER", "Basic QVBQTU9CSUxFX1NQRUNJQUw6UGs3alVTcDgzbUh4VDU4NA==")
+BASE_URL = _env("BASE_URL", "https://recup-webapi-appmobile.regione.lazio.it")
+AUTH_HEADER = _env("AUTH_HEADER", "Basic QVBQTU9CSUxFX1NQRUNJQUw6UGs3alVTcDgzbUh4VDU4NA==")
 
 # Configurazione Telegram - CRITICO: deve essere in .env
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_TOKEN = _env("TELEGRAM_BOT_TOKEN")
 
 if not TELEGRAM_TOKEN:
     logger.error("ERRORE CRITICO: TELEGRAM_BOT_TOKEN non trovato nelle variabili d'ambiente!")
     logger.error("Crea un file .env con: TELEGRAM_BOT_TOKEN=your_token_here")
     raise ValueError("TELEGRAM_BOT_TOKEN non configurato! Controlla il file .env")
 
+
+
+class _RedactTokenFormatter(logging.Formatter):
+    """Oscura il token del bot in qualsiasi riga di log (messaggi, URL, traceback)."""
+
+    def format(self, record):
+        return super().format(record).replace(TELEGRAM_TOKEN, "***TOKEN***")
+
+
+for _handler in logging.getLogger().handlers:
+    _handler.setFormatter(_RedactTokenFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+
 logger.info("Token Telegram caricato correttamente")
 
 # Percorsi dei file - Configurabili via env
-PDF_FOLDER = os.getenv("PDF_FOLDER", "prenotazioni_pdf")
-REPORTS_FOLDER = os.getenv("REPORTS_FOLDER", "reports_pdf")
+PDF_FOLDER = _env("PDF_FOLDER", "prenotazioni_pdf")
+REPORTS_FOLDER = _env("REPORTS_FOLDER", "reports_pdf")
 
 # Percorsi file JSON — mantenuti per la migrazione automatica a SQLite
-REPORTS_MONITORING_FILE = os.getenv("REPORTS_MONITORING_FILE", "reports_monitoring.json")
-INPUT_FILE = os.getenv("INPUT_FILE", "input_prescriptions.json")
-PREVIOUS_DATA_FILE = os.getenv("PREVIOUS_DATA_FILE", "previous_data.json")
-USERS_FILE = os.getenv("USERS_FILE", "authorized_users.json")
+REPORTS_MONITORING_FILE = _env("REPORTS_MONITORING_FILE", "reports_monitoring.json")
+INPUT_FILE = _env("INPUT_FILE", "input_prescriptions.json")
+PREVIOUS_DATA_FILE = _env("PREVIOUS_DATA_FILE", "previous_data.json")
+USERS_FILE = _env("USERS_FILE", "authorized_users.json")
 
 # Database SQLite
-DB_FILE = os.getenv("DB_FILE", "data/recup_monitor.db")
+DB_FILE = _env("DB_FILE", "data/recup_monitor.db")
 
 # Crea le directory necessarie
 os.makedirs(PDF_FOLDER, exist_ok=True)
 os.makedirs(REPORTS_FOLDER, exist_ok=True)
 
 # Impostazioni di monitoraggio
-CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "300"))  # 5 minuti default
-ENABLE_NOTIFICATIONS = os.getenv("ENABLE_NOTIFICATIONS", "true").lower() == "true"
+CHECK_INTERVAL = int(_env("CHECK_INTERVAL", "300"))  # 5 minuti default
+ENABLE_NOTIFICATIONS = _env("ENABLE_NOTIFICATIONS", "true").lower() == "true"
 
 # Impostazioni avanzate
-MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
-REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "30"))
-DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
+MAX_RETRIES = int(_env("MAX_RETRIES", "3"))
+REQUEST_TIMEOUT = int(_env("REQUEST_TIMEOUT", "30"))
+DEBUG_MODE = _env("DEBUG_MODE", "false").lower() == "true"
 
-logger.info(f"Configurazione caricata:")
+logger.info("Configurazione caricata:")
 logger.info(f"  - Check interval: {CHECK_INTERVAL}s")
 logger.info(f"  - Notifiche: {'Abilitate' if ENABLE_NOTIFICATIONS else 'Disabilitate'}")
 logger.info(f"  - Debug mode: {'ON' if DEBUG_MODE else 'OFF'}")

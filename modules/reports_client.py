@@ -1,9 +1,6 @@
 import requests
-import logging
-import json
 import os
 from datetime import datetime
-from io import BytesIO
 
 # Importa il logger e le configurazioni
 from config import logger, REPORTS_FOLDER
@@ -37,7 +34,7 @@ def get_access_token():
     
     try:
         # Make the request for the token
-        token_response = requests.post(token_url, headers=token_headers, data=token_data)
+        token_response = requests.post(token_url, headers=token_headers, data=token_data, timeout=20)
         
         # Check if the request was successful
         if token_response.status_code == 200:
@@ -54,7 +51,7 @@ def get_access_token():
                 return None
         else:
             logger.error(f"Error: Token request failed with status code {token_response.status_code}")
-            logger.error(f"Response: {token_response.text}")
+            logger.error(f"Response: {token_response.text[:200]}")
             return None
     except Exception as e:
         logger.error(f"Exception occurred during token request: {str(e)}")
@@ -102,7 +99,7 @@ def download_reports(fiscal_number, password, tscns):
     
     try:
         # Make the POST request
-        response = requests.post(url, headers=headers, json=payload)
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
         
         # Check if the request was successful
         if response.status_code == 200:
@@ -111,7 +108,6 @@ def download_reports(fiscal_number, password, tscns):
             return reports
         else:
             logger.error(f"Error: Request failed with status code {response.status_code}")
-            logger.error(f"Response: {response.text}")
             return None
     except Exception as e:
         logger.error(f"Exception occurred during reports download: {str(e)}")
@@ -160,7 +156,7 @@ def download_report_document(document_id, fiscal_number, password, tscns):
     
     try:
         # Make the POST request
-        response = requests.post(url, headers=headers, json=payload)
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
         
         # Check if the request was successful
         if response.status_code == 200:
@@ -169,7 +165,6 @@ def download_report_document(document_id, fiscal_number, password, tscns):
             return content
         else:
             logger.error(f"Error: Document download failed with status code {response.status_code}")
-            logger.error(f"Response: {response.text}")
             return None
     except Exception as e:
         logger.error(f"Exception occurred during document download: {str(e)}")
@@ -215,7 +210,7 @@ def download_all_report_documents(fiscal_number, password, tscns, output_dir=Non
     for report in reports:
         document_id = report.get("document_id")
         if not document_id:
-            logger.warning(f"Missing document_id in report: {report}")
+            logger.warning("Missing document_id in report")
             continue
         
         # Get document metadata for filename

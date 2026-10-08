@@ -4,11 +4,10 @@ import json
 import logging
 import os
 from contextlib import contextmanager
-from datetime import datetime
 
 logger = logging.getLogger("Database")
 
-DB_FILE = os.getenv("DB_FILE", "data/recup_monitor.db")
+DB_FILE = os.getenv("DB_FILE") or "data/recup_monitor.db"
 
 # Protegge scritture concorrenti all'interno dello stesso processo
 # (cross-process è gestito da SQLite WAL + busy_timeout)
@@ -52,7 +51,6 @@ def get_connection():
 
 def init_db():
     """Crea lo schema del database e migra i dati da JSON se necessario."""
-    path = _db_path()
     # Setta WAL mode una volta sola (persiste nel file)
     conn = _new_conn()
     try:
@@ -97,6 +95,11 @@ def init_db():
                 data TEXT NOT NULL,
                 updated_at TEXT DEFAULT (datetime('now'))
             );
+
+            CREATE TABLE IF NOT EXISTS meta (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
         """)
         conn.commit()
     finally:
@@ -106,8 +109,17 @@ def init_db():
     migrate_from_json()
 
 
+def _load_json(path, **kwargs):
+    with open(path, **kwargs) as f:
+        return json.load(f)
+
+
 def migrate_from_json():
-    """Importa i dati dai file JSON esistenti se il DB è vuoto."""
+    """
+    Importa i dati dai file JSON esistenti se il DB è vuoto.
+    Viene eseguita una sola volta: dopo la prima migrazione i file JSON vengono ignorati,
+    così i dati cancellati dal bot non ricompaiono al riavvio.
+    """
     try:
         from config import (
             INPUT_FILE, PREVIOUS_DATA_FILE, USERS_FILE, REPORTS_MONITORING_FILE
@@ -123,11 +135,14 @@ def migrate_from_json():
     with _lock:
         conn = _new_conn()
         try:
+            if conn.execute("SELECT 1 FROM meta WHERE key = 'json_migrated'").fetchone():
+                return
+
             # users
             if conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
                 if os.path.exists(USERS_FILE):
                     try:
-                        users = json.load(open(USERS_FILE))
+                        users = _load_json(USERS_FILE)
                         for uid in users:
                             conn.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (str(uid),))
                         logger.info(f"Migrati {len(users)} utenti da {USERS_FILE}")
@@ -138,7 +153,7 @@ def migrate_from_json():
             if conn.execute("SELECT COUNT(*) FROM prescriptions").fetchone()[0] == 0:
                 if os.path.exists(INPUT_FILE):
                     try:
-                        prescriptions = json.load(open(INPUT_FILE))
+                        prescriptions = _load_json(INPUT_FILE)
                         for p in prescriptions:
                             conn.execute(
                                 """INSERT OR IGNORE INTO prescriptions
@@ -165,7 +180,7 @@ def migrate_from_json():
             if conn.execute("SELECT COUNT(*) FROM previous_availabilities").fetchone()[0] == 0:
                 if os.path.exists(PREVIOUS_DATA_FILE):
                     try:
-                        previous = json.load(open(PREVIOUS_DATA_FILE))
+                        previous = _load_json(PREVIOUS_DATA_FILE)
                         for key, value in previous.items():
                             conn.execute(
                                 "INSERT OR IGNORE INTO previous_availabilities (prescription_key, availabilities) VALUES (?, ?)",
@@ -179,7 +194,7 @@ def migrate_from_json():
             if conn.execute("SELECT COUNT(*) FROM locations").fetchone()[0] == 0:
                 if os.path.exists(LOCATIONS_JSON):
                     try:
-                        locations = json.load(open(LOCATIONS_JSON, encoding="utf-8"))
+                        locations = _load_json(LOCATIONS_JSON, encoding="utf-8")
                         for key, loc in locations.items():
                             conn.execute(
                                 "INSERT OR IGNORE INTO locations (key, hospital, address, latitude, longitude) VALUES (?, ?, ?, ?, ?)",
@@ -193,15 +208,17 @@ def migrate_from_json():
             if conn.execute("SELECT COUNT(*) FROM reports_monitoring").fetchone()[0] == 0:
                 if os.path.exists(REPORTS_MONITORING_FILE):
                     try:
-                        reports = json.load(open(REPORTS_MONITORING_FILE))
+                        reports = _load_json(REPORTS_MONITORING_FILE)
                         if reports:
                             conn.execute("INSERT INTO reports_monitoring (data) VALUES (?)", (json.dumps(reports),))
                             logger.info(f"Migrati dati reports_monitoring da {REPORTS_MONITORING_FILE}")
                     except Exception as e:
                         logger.error(f"Errore migrazione reports_monitoring: {e}")
 
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('json_migrated', datetime('now'))"
+            )
             conn.commit()
+            logger.info("Migrazione da JSON completata")
         finally:
             conn.close()
-
-    logger.info("Migrazione da JSON completata")

@@ -43,14 +43,8 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    
-    # Health check
-    healthcheck:
-      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+
+    # Health check: definito nel Dockerfile (heartbeat del ciclo di monitoraggio)
 
 # Optional: Define networks
 networks:

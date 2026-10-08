@@ -1,4 +1,3 @@
-import json
 import os
 import logging
 import requests
@@ -6,6 +5,9 @@ import requests
 from modules.database import get_connection, _lock
 
 logger = logging.getLogger("LocationsDB")
+
+
+_missing_key_logged = False
 
 
 def _geoapify_key():
@@ -17,9 +19,12 @@ def geocode_query(query):
     Geocodifica una query usando Geoapify.
     Restituisce (lat, lon) oppure (None, None).
     """
+    global _missing_key_logged
     api_key = _geoapify_key()
     if not api_key:
-        logger.warning("GEOAPIFY_API_KEY non configurata, geocoding saltato")
+        if not _missing_key_logged:
+            logger.warning("GEOAPIFY_API_KEY non configurata, geocoding disattivato")
+            _missing_key_logged = True
         return None, None
 
     try:
@@ -33,8 +38,11 @@ def geocode_query(query):
         if features:
             coords = features[0]["geometry"]["coordinates"]
             return coords[1], coords[0]  # lat, lon
+    except requests.HTTPError as e:
+        # Non logghiamo l'eccezione: contiene l'URL con la chiave API
+        logger.warning(f"Errore nel geocoding per '{query}': HTTP {e.response.status_code}")
     except Exception as e:
-        logger.warning(f"Errore nel geocoding per '{query}': {e}")
+        logger.warning(f"Errore nel geocoding per '{query}': {type(e).__name__}")
     return None, None
 
 
@@ -60,11 +68,10 @@ def load_locations_db():
 
 
 def save_locations_db(locations):
-    """Salva il database delle location nella tabella locations (DELETE + INSERT)."""
+    """Salva (upsert) le location passate. Le location esistenti non vengono mai cancellate."""
     try:
         with _lock:
             with get_connection() as conn:
-                conn.execute("DELETE FROM locations")
                 for key, loc in locations.items():
                     conn.execute(
                         "INSERT OR REPLACE INTO locations (key, hospital, address, latitude, longitude) VALUES (?, ?, ?, ?, ?)",

@@ -26,8 +26,16 @@ echo "✓ TELEGRAM_BOT_TOKEN is set"
 
 # Fix ownership and permissions
 echo "Fixing permissions..."
-chown -R botuser:botuser /app/logs /app/data /app/debug_responses /app/reports_pdf /app/prenotazioni_pdf 2>/dev/null || true
-chmod -R 777 /app/logs /app/data /app/debug_responses /app/reports_pdf /app/prenotazioni_pdf 2>/dev/null || true
+DIRS="/app/logs /app/data /app/debug_responses /app/reports_pdf /app/prenotazioni_pdf"
+if chown -R botuser:botuser $DIRS 2>/dev/null; then
+    chmod -R u+rwX $DIRS 2>/dev/null || true
+    # Il database contiene dati personali: accessibile solo all'utente del bot
+    chmod -R go-rwx /app/data 2>/dev/null || true
+else
+    # chown non consentito (es. cap_drop): unico modo per lasciare le cartelle scrivibili
+    echo "⚠️  chown non riuscito, uso permessi aperti sulle cartelle dati"
+    chmod -R 777 $DIRS 2>/dev/null || true
+fi
 
 echo "✓ Directory setup complete"
 echo ""

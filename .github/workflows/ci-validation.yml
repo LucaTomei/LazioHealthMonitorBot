@@ -50,7 +50,24 @@ jobs:
           python -c "from modules import data_utils; print('✓ data_utils imports OK')"
           python -c "from modules import monitoring; print('✓ monitoring imports OK')"
           python -c "from modules import reports_client; print('✓ reports_client imports OK')"
+          python -c "from modules import reports_monitor, prescription_processor, telegram_utils, database, locations_db; print('✓ other modules import OK')"
+          python -c "import recup_monitor; print('✓ recup_monitor imports OK')"
           echo "✓ All imports successful"
+
+      - name: Static analysis
+        run: |
+          pip install pyflakes
+          python -m pyflakes recup_monitor.py config.py modules/
+
+      - name: Build bot handlers
+        env:
+          TELEGRAM_BOT_TOKEN: "123456:test_token_for_ci"
+        run: |
+          python -W ignore -c "from telegram.ext import Application; from modules.bot_handlers import setup_handlers; app = Application.builder().token('123456:test_token_for_ci').build(); setup_handlers(app); print('✓ Handlers registered')"
+
+      - name: Run tests
+        run: |
+          python -W ignore -m unittest discover -s tests -v
 
       - name: Check for common issues
         run: |
@@ -100,13 +117,17 @@ jobs:
           TZ=Europe/Rome
           EOF
 
-          echo "Validating docker-compose-yml..."
-          docker compose -f docker-compose-yml config > /dev/null
-          echo "✓ docker-compose-yml is valid"
+          echo "Validating docker-compose.yml..."
+          docker compose -f docker-compose.yml config > /dev/null
+          echo "✓ docker-compose.yml is valid"
 
           echo "Validating docker-compose.ghcr.yml..."
           docker compose -f docker-compose.ghcr.yml config > /dev/null
           echo "✓ docker-compose.ghcr.yml is valid"
+
+          echo "Validating docker-compose.portainer.yml..."
+          TELEGRAM_BOT_TOKEN=dummy docker compose -f docker-compose.portainer.yml config > /dev/null
+          echo "✓ docker-compose.portainer.yml is valid"
 
           # Clean up
           rm .env
@@ -116,7 +137,7 @@ jobs:
           echo "Checking volume mappings..."
 
           # Check that all critical directories are mapped in docker-compose files
-          for file in docker-compose-yml docker-compose.ghcr.yml; do
+          for file in docker-compose.yml docker-compose.ghcr.yml; do
             echo "Checking $file..."
             grep -q "logs:/app/logs" $file || (echo "ERROR: logs volume missing in $file" && exit 1)
             grep -q "data:/app/data" $file || (echo "ERROR: data volume missing in $file" && exit 1)
@@ -147,7 +168,7 @@ jobs:
           test -f "Dockerfile" || (echo "ERROR: Dockerfile missing" && exit 1)
 
           # Docker compose files
-          test -f "docker-compose-yml" || (echo "ERROR: docker-compose-yml missing" && exit 1)
+          test -f "docker-compose.yml" || (echo "ERROR: docker-compose.yml missing" && exit 1)
           test -f "docker-compose.ghcr.yml" || (echo "ERROR: docker-compose.ghcr.yml missing" && exit 1)
 
           # Configuration samples
@@ -225,7 +246,7 @@ jobs:
           # Verify non-root user strategy is used (either USER directive or gosu in entrypoint)
           if grep -q "USER botuser" Dockerfile; then
             echo "✓ Using USER directive for non-root execution"
-          elif grep -q "gosu botuser" Dockerfile && grep -q "ENTRYPOINT" Dockerfile; then
+          elif grep -q "gosu botuser" docker-entrypoint.sh && grep -q "ENTRYPOINT" Dockerfile; then
             echo "✓ Using gosu with entrypoint for non-root execution"
           else
             echo "WARNING: Container might run as root - no USER directive or gosu found"

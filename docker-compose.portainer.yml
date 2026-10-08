@@ -5,10 +5,12 @@ services:
     restart: unless-stopped
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - TZ=${TZ}
-      - LOG_LEVEL=${LOG_LEVEL}
-      - GEOAPIFY_API_KEY=${GEOAPIFY_API_KEY}
-      - DB_FILE=${DB_FILE}
+      - TZ=${TZ:-Europe/Rome}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - GEOAPIFY_API_KEY=${GEOAPIFY_API_KEY:-}
+      - DB_FILE=${DB_FILE:-data/recup_monitor.db}
+      - CHECK_INTERVAL=${CHECK_INTERVAL:-300}
+      - SERVER_NAME=${SERVER_NAME:-server1}
     volumes:
       - /opt/docker/laziobot/logs:/app/logs
       - /opt/docker/laziobot/data:/app/data

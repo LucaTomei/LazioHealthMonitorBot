@@ -1,5 +1,4 @@
 import requests
-import logging
 
 from config import (
     logger, BASE_URL, AUTH_HEADER
@@ -78,7 +77,7 @@ def get_patient_info(fiscal_code):
         response.raise_for_status()
         return response.json()
     except Exception as e:
-        logger.error(f"Errore nell'ottenere informazioni sul paziente {fiscal_code}: {str(e)}")
+        logger.error(f"Errore nell'ottenere informazioni sul paziente: {str(e).replace(fiscal_code, fiscal_code[:6] + '**********')}")
         return None
 
 def get_doctor_info(fiscal_code):
@@ -105,202 +104,8 @@ def get_doctor_info(fiscal_code):
         response.raise_for_status()
         return response.json()
     except Exception as e:
-        logger.error(f"Errore nell'ottenere le informazioni del medico per {fiscal_code}: {str(e)}")
+        logger.error(f"Errore nell'ottenere le informazioni del medico: {str(e).replace(fiscal_code, fiscal_code[:6] + '**********')}")
         return None
-
-def book_appointment(process_id, data_prenotazione, diary_id, service_cur, nre, fiscal_code):
-    """
-    Perform prebooking for an appointment.
-    
-    This function matches the API call in 1.har, creating a temporary hold on the appointment slot.
-    """
-    url = f"{BASE_URL}/api/v4/experience-apis/doctors/bpx/{process_id}/prebooking"
-    
-    headers = {
-        "Accept": "*/*",
-        "Content-Type": "application/json",
-        "Accept-Language": "it-IT,it;q=0.9",
-        "Authorization": AUTH_HEADER,
-        "Host": "recup-webapi-appmobile.regione.lazio.it",
-        "Connection": "keep-alive",
-        "User-Agent": "salutelazio/2.2.0 CFNetwork/3826.400.120 Darwin/24.3.0",
-        "Accept-Encoding": "gzip"
-    }
-    
-    payload = {
-        "date": data_prenotazione,
-        "diaryId": diary_id,
-        "requestId": "A0",
-        "supplyModeId": "A",
-        "extraServices": [],
-        "serviceCur": service_cur,
-        "exemptionId": "NE00",
-        "priority": "P",
-        "nre": nre,
-        "processId": process_id,
-        "personIdentifier": fiscal_code
-    }
-    
-    response = requests.post(url, headers=headers, json=payload, verify=False, timeout=20)
-    
-    # More detailed logging for debugging
-    print(f"Pre-booking Status Code: {response.status_code}")
-    
-    if response.status_code != 201:  # The API returns 201 Created for successful prebookings
-        print(f"Pre-booking Error Response: {response.text}")
-        raise Exception(f"Pre-booking failed with status code {response.status_code}")
-    
-    return response.json()
-
-def complete_booking(fiscal_code, process_id, nre, phone_number, email, lock_id, order_id, data_prenotazione, diary_id):
-    """
-    Complete the booking process after a successful prebooking.
-    
-    This function matches the API call in 2.har, finalizing the appointment reservation.
-    """
-    url = f"{BASE_URL}/api/v4/process-apis/booking-management/bookings"
-    
-    headers = {
-        "Accept": "*/*",
-        "Content-Type": "application/json",
-        "Accept-Language": "it-IT,it;q=0.9",
-        "Authorization": AUTH_HEADER,
-        "Host": "recup-webapi-appmobile.regione.lazio.it",
-        "Connection": "keep-alive",
-        "User-Agent": "salutelazio/2.2.0 CFNetwork/3826.400.120 Darwin/24.3.0",
-        "Accept-Encoding": "gzip"
-    }
-    
-    # This payload structure exactly matches what's in 2.har
-    payload = {
-        "prescriptionNumber": nre,
-        "processId": process_id,
-        "diaryId": diary_id,  # Ora passato come parametro
-        "contacts": {
-            "phoneNumber": phone_number,
-            "email": email
-        },
-        "startTime": data_prenotazione,
-        "services": [{
-            "id": order_id,
-            "requestId": "A0"
-        }],
-        "lockId": lock_id,
-        "personIdentifier": fiscal_code,
-        "status": "PRENOTATA",
-        "supplyModeId": "A"
-    }
-    
-    response = requests.post(url, headers=headers, json=payload, verify=False, timeout=20)
-    
-    # Enhanced error handling and logging
-    print(f"Complete Booking Status Code: {response.status_code}")
-    
-    if response.status_code != 200:
-        print(f"Complete Booking Error Response: {response.text}")
-        raise Exception(f"Booking completion failed with status code {response.status_code}")
-    
-    result = response.json()
-    
-    # Extract booking ID with robust error handling
-    booking_id = None
-    if 'id' in result:
-        booking_id = result['id']
-    elif 'content' in result and result['content'] and 'id' in result['content'][0]:
-        booking_id = result['content'][0]['id']
-    else:
-        print("Warning: Could not find booking ID in response")
-        print(f"Response content: {result}")
-    
-    return result, booking_id
-
-def get_booking_document(booking_id, output_path=None):
-    """
-    Retrieve the booking document (PDF) and save it locally.
-    
-    This function matches the API call in 3.har.
-    """
-    url = f"{BASE_URL}/api/v3/process-apis/booking-management/bookings/{booking_id}/documents"
-    
-    headers = {
-        "Accept": "*/*",
-        "Accept-Language": "it-IT,it;q=0.9",
-        "Authorization": AUTH_HEADER,
-        "Host": "recup-webapi-appmobile.regione.lazio.it",
-        "Connection": "keep-alive",
-        "User-Agent": "salutelazio/2.2.0 CFNetwork/3826.400.120 Darwin/24.3.0",
-        "Accept-Encoding": "gzip"
-    }
-    
-    response = requests.get(url, headers=headers, verify=False, timeout=20)
-    
-    # Enhanced error handling
-    if response.status_code != 200:
-        print(f"Get Document Error: Status Code {response.status_code}")
-        print(f"Response content: {response.text}")
-        raise Exception(f"Failed to retrieve booking document with status code {response.status_code}")
-    
-    # If we need to save the PDF
-    if output_path is None:
-        # Create a default filename with booking ID and timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = f"booking_{booking_id}_{timestamp}.pdf"
-    
-    # Save the PDF to disk
-    with open(output_path, 'wb') as f:
-        f.write(response.content)
-    
-    print(f"✅ Booking document saved to: {output_path}")
-    return output_path
-
-def cancel_booking(booking_id):
-    """
-    Cancel a specific booking.
-    
-    This function matches the API call in 6.har.
-    """
-    url = f"{BASE_URL}/api/v3/process-apis/booking-management/bookings"
-    
-    headers = {
-        "Accept": "*/*",
-        "Content-Type": "application/json",
-        "Accept-Language": "it-IT,it;q=0.9",
-        "Authorization": AUTH_HEADER,
-        "Host": "recup-webapi-appmobile.regione.lazio.it",
-        "Connection": "keep-alive",
-        "User-Agent": "salutelazio/2.2.0 CFNetwork/3826.400.120 Darwin/24.3.0",
-        "Accept-Encoding": "gzip"
-    }
-    
-    # This payload structure exactly matches what's in 6.har
-    payload = [{
-        "reasonId": 4,  # Reason code for cancellation
-        "bookingStatus": "ELIMINATA",
-        "identifiedBy": "ID_DI_SISTEMA",
-        "identifier": booking_id
-    }]
-    
-    response = requests.patch(url, headers=headers, json=payload, verify=False)
-    
-    # Better error handling
-    if response.status_code != 200:
-        print(f"Cancellation Error: Status Code {response.status_code}")
-        print(f"Response content: {response.text}")
-        raise Exception(f"Booking cancellation failed with status code {response.status_code}")
-    
-    result = response.json()
-    
-    # Check if cancellation was successful using the results
-    if result and '_messages' in result:
-        if not result['_messages']:
-            print("✅ Booking successfully canceled")
-        else:
-            print("⚠️ Cancellation may have issues:", result['_messages'])
-    else:
-        print("✅ Booking canceled successfully")
-    
-    return result
-
 
 def check_prescription(patient_id, nre):
     """Check prescription details."""
