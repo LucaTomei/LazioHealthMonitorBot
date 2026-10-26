@@ -23,7 +23,7 @@ def _headers(json_body=False):
     return headers
 
 
-def book_appointment(process_id, data_prenotazione, diary_id, service_cur, nre, fiscal_code):
+def book_appointment(process_id, data_prenotazione, diary_id, service_cur, nre, fiscal_code, priority="P"):
     """
     Perform prebooking for an appointment.
 
@@ -39,7 +39,7 @@ def book_appointment(process_id, data_prenotazione, diary_id, service_cur, nre, 
         "extraServices": None,  # API expects null, not []
         "serviceCur": service_cur,
         "exemptionId": "NE00",
-        "priority": "P",
+        "priority": priority,
         "nre": nre,
         "processId": process_id,
         "personIdentifier": fiscal_code
@@ -196,7 +196,7 @@ def booking_workflow(fiscal_code, nre, phone_number, email, patient_id=None, pro
     """
     from modules.api_client import (
         get_patient_info, get_doctor_info, check_prescription,
-        get_prescription_details, get_availabilities, api_message
+        get_prescription_details, get_availabilities, api_message, prescription_priority
     )
     from modules.data_utils import get_prescription, is_date_within_range
 
@@ -242,7 +242,8 @@ def booking_workflow(fiscal_code, nre, phone_number, email, patient_id=None, pro
         ]
 
         # Step 5: Get availabilities
-        availabilities = get_availabilities(patient_id, process_id, nre, order_ids)
+        priority = prescription_priority(prescription_details)
+        availabilities = get_availabilities(patient_id, process_id, nre, order_ids, priority)
         if not availabilities or 'content' not in availabilities:
             return {"success": False, "message": f"Impossibile ottenere le disponibilità per {nre}"}
         if availabilities.get("_already_booked"):
@@ -327,7 +328,8 @@ def booking_workflow(fiscal_code, nre, phone_number, email, patient_id=None, pro
                 selected_diary_id,
                 service_cur,
                 nre,
-                fiscal_code
+                fiscal_code,
+                priority
             )
             lock_id = prebooking_result['id']
             logger.info(f"Pre-booking successful. Lock ID: {lock_id}")

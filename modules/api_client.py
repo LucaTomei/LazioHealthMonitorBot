@@ -1,8 +1,32 @@
+import re
+
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from config import (
-    logger, BASE_URL, AUTH_HEADER
+    logger, BASE_URL, AUTH_HEADER, MAX_RETRIES
 )
+
+# Sessione per le sole chiamate di lettura (GET): errori di rete momentanei e
+# 502/503/504 vengono ritentati. Le chiamate di prenotazione non passano da qui.
+_read_session = requests.Session()
+_retry_adapter = HTTPAdapter(max_retries=Retry(
+    total=MAX_RETRIES,
+    connect=MAX_RETRIES,
+    # Un server che non risponde entro il timeout raramente risponde subito dopo:
+    # un solo nuovo tentativo, per non far attendere l'utente troppo a lungo
+    read=min(MAX_RETRIES, 1),
+    status=MAX_RETRIES,
+    backoff_factor=0.5,
+    status_forcelist=(502, 503, 504),
+    allowed_methods=frozenset({"GET"}),
+    # Pause brevi e prevedibili anche se il server chiede di attendere a lungo
+    respect_retry_after_header=False,
+    raise_on_status=False,
+))
+_read_session.mount("https://", _retry_adapter)
+_read_session.mount("http://", _retry_adapter)
 
 def get_access_token():
     """Obtain access token from the authentication endpoint."""
@@ -73,7 +97,7 @@ def get_patient_info(fiscal_code):
     }
     
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=20)
+        response = _read_session.get(url, headers=headers, params=params, timeout=20)
         response.raise_for_status()
         return response.json()
     except Exception as e:
@@ -115,6 +139,18 @@ def _fix_encoding(text):
         return text
 
 
+# Codici errore delle API (es. INVALID_PRESCRIPTION_PRIORITY)
+_ERROR_CODE = re.compile(r"^[A-Z][A-Z0-9]*(_[A-Z0-9]+)+$")
+
+PRENOTA_SMART_URL = "https://prenotasmart.regione.lazio.it"
+
+
+def prescription_priority(prescription_details):
+    """Classe di priorità della ricetta (U, B, D, P) dai dettagli; P se non disponibile."""
+    priority = ((prescription_details or {}).get("priorita") or {}).get("id")
+    return priority if priority in ("U", "B", "D", "P") else "P"
+
+
 def api_message(result):
     """
     Motivo leggibile del primo messaggio restituito dalle API RecUP
@@ -127,10 +163,19 @@ def api_message(result):
     text = _fix_encoding(str(messages[0].get("text") or "").strip())
 
     # A seconda dell'endpoint il codice errore può trovarsi nel campo "text" e viceversa
-    if "INVALID_PRESCRIPTION_PRIORITY" in (code, text):
-        priority = text if code == "INVALID_PRESCRIPTION_PRIORITY" else code
-        return (f"priorità «{priority}», che la Regione non permette di prenotare online. "
+    if _ERROR_CODE.match(text) and not _ERROR_CODE.match(code):
+        code, text = text, code
+
+    if code == "INVALID_PRESCRIPTION_PRIORITY":
+        return (f"priorità «{text}», che la Regione non permette di prenotare online. "
                 "Puoi prenotarla tramite ReCUP (06 9939), in farmacia o allo sportello CUP")
+
+    if code == "INVALID_PRESCRIPTION_SERVICE_CRITICAL":
+        match = re.search(r"prestazione (.+?) non è critica", text)
+        service = match.group(1).strip() if match else "questa prestazione"
+        return (f"con la classe di priorità di questa ricetta l'app della Regione permette di prenotare "
+                f"solo alcune prestazioni, e {service} non è tra queste. Puoi prenotarla online su "
+                f"Prenota Smart ({PRENOTA_SMART_URL}), tramite ReCUP (06 9939) o allo sportello CUP")
 
     # Prefisso del livello di errore (es. "E - ...")
     if len(text) > 4 and text[0] in "EWI" and text[1:4] == " - ":
@@ -158,7 +203,7 @@ def check_prescription(patient_id, nre):
     }
     
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=20)
+        response = _read_session.get(url, headers=headers, params=params, timeout=20)
         if response.status_code == 404:
             try:
                 messages = response.json().get("_messages") or []
@@ -192,14 +237,14 @@ def get_prescription_details(patient_id, nre):
     }
     
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=20)
+        response = _read_session.get(url, headers=headers, params=params, timeout=20)
         response.raise_for_status()
         return response.json()
     except Exception as e:
         logger.error(f"Errore nell'ottenere i dettagli della prescrizione {nre}: {str(e)}")
         return None
 
-def get_availabilities(patient_id, process_id, nre, order_ids):
+def get_availabilities(patient_id, process_id, nre, order_ids, priority="P"):
     """Get medical service availabilities."""
     url = f"{BASE_URL}/api/v3/experience-apis/citizens/availabilities"
     
@@ -218,12 +263,12 @@ def get_availabilities(patient_id, process_id, nre, order_ids):
         "processId": process_id,
         "nre": nre,
         "orderIds": order_ids,
-        "prescriptionPriority": "P",
+        "prescriptionPriority": priority,
         "firstBy": "hospital-best-10"
     }
     
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=20)
+        response = _read_session.get(url, headers=headers, params=params, timeout=20)
         if response.status_code == 400:
             try:
                 messages = response.json().get("_messages") or []

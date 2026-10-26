@@ -826,6 +826,108 @@ class ApiMessagesTests(BotTestCase):
         self.assertTrue(os.path.exists(os.path.join(os.environ["DEBUG_FOLDER"], f"{NRE}_details.json")))
 
 
+class PriorityTests(BotTestCase):
+    async def test_critical_service_message_both_field_orders(self):
+        from modules.api_client import api_message
+        text = "Attenzione! la prestazione ECOGRAFIA SPALLA SX non è critica"
+        for result in (
+            {"content": False, "_messages": [{"code": "INVALID_PRESCRIPTION_SERVICE_CRITICAL", "text": text}]},
+            {"_messages": [{"code": text, "text": "INVALID_PRESCRIPTION_SERVICE_CRITICAL"}]},
+        ):
+            message = api_message(result)
+            self.assertIn("ECOGRAFIA SPALLA SX non è tra queste", message)
+            self.assertIn("Prenota Smart", message)
+            self.assertNotIn("INVALID_", message)
+
+    async def test_unknown_error_code_never_shown_raw(self):
+        from modules.api_client import api_message
+        swapped = {"_messages": [{"code": "Messaggio leggibile", "text": "SOME_NEW_ERROR_CODE"}]}
+        self.assertEqual(api_message(swapped), "Messaggio leggibile")
+        numeric = {"_messages": [{"code": "404", "text": "E - ricetta scaduta"}]}
+        self.assertEqual(api_message(numeric), "ricetta scaduta")
+
+    async def test_prescription_priority_mapping(self):
+        from modules.api_client import prescription_priority
+        self.assertEqual(prescription_priority({"priorita": {"id": "D"}}), "D")
+        self.assertEqual(prescription_priority({"priorita": {"id": "B"}}), "B")
+        self.assertEqual(prescription_priority({"priorita": {"id": "A"}}), "P")
+        self.assertEqual(prescription_priority({}), "P")
+        self.assertEqual(prescription_priority(None), "P")
+
+    async def test_monitor_uses_prescription_priority(self):
+        p = self.add_prescription_row()
+        patches = MonitoringTests._patch_api(self, [])
+        patches[4] = mock.patch.object(prescription_processor, "get_prescription_details", return_value={
+            "priorita": {"id": "D"}, "details": [{"service": {"id": "S1", "description": "ECOGRAFIA"}}]})
+        started = [patch.start() for patch in patches]
+        try:
+            prescription_processor.process_prescription(p, {})
+            get_availabilities = started[5]
+            self.assertEqual(get_availabilities.call_args.args[4], "D")
+        finally:
+            for patch in patches:
+                patch.stop()
+
+    async def test_booking_uses_prescription_priority(self):
+        from modules import booking_client
+        slot = avail("2030-01-01T08:00:00Z")
+        with mock.patch("modules.api_client.get_patient_info", return_value={"content": [{"id": "P1"}]}), \
+                mock.patch("modules.api_client.get_doctor_info", return_value={"id": "PR1"}), \
+                mock.patch("modules.api_client.check_prescription", return_value={"content": True}), \
+                mock.patch("modules.api_client.get_prescription_details", return_value={
+                    "priorita": {"id": "B"}, "details": [{"service": {"id": "S1", "code": "C1", "description": "TAC"}}]}), \
+                mock.patch("modules.api_client.get_availabilities", return_value={"content": [slot]}) as get_avail, \
+                mock.patch.object(booking_client, "book_appointment", return_value={"id": "LOCK"}) as prebook, \
+                mock.patch.object(booking_client, "complete_booking", return_value=({}, "BK9")), \
+                mock.patch.object(booking_client, "get_booking_document", return_value=("x.pdf", b"%PDF")):
+            result = booking_client.booking_workflow(CF, NRE, "333", "a@b.it", slot_date=slot["date"], diary_id="D")
+        self.assertTrue(result["success"])
+        self.assertEqual(get_avail.call_args.args[4], "B")
+        self.assertEqual(prebook.call_args.args[6], "B")
+
+
+class RetryTests(unittest.TestCase):
+    def _serve(self, statuses):
+        import http.server, threading
+        hits = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                status = statuses[min(len(hits), len(statuses) - 1)]
+                hits.append(status)
+                body = json.dumps({"content": True} if status == 200 else
+                                  {"_messages": [{"code": str(status), "text": "E - ricetta scaduta"}]}).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        return f"http://127.0.0.1:{server.server_address[1]}", hits
+
+    def test_transient_errors_are_retried(self):
+        from modules import api_client
+        url, hits = self._serve([503, 502, 200])
+        with mock.patch.object(api_client, "BASE_URL", url):
+            result = api_client.check_prescription("P1", NRE)
+        self.assertEqual(result, {"content": True})
+        self.assertEqual(hits, [503, 502, 200])
+
+    def test_definitive_answers_are_not_retried(self):
+        from modules import api_client
+        url, hits = self._serve([404])
+        with mock.patch.object(api_client, "BASE_URL", url):
+            result = api_client.check_prescription("P1", NRE)
+        self.assertTrue(result["_not_found"])
+        self.assertEqual(hits, [404])
+
+
 class ReviewFixesTests(BotTestCase):
     async def test_admin_order_survives_reload(self):
         config.authorized_users.clear()

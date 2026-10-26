@@ -6,7 +6,7 @@ from config import logger, DEBUG_FOLDER
 from modules.api_client import (
     get_access_token, update_device_token, get_patient_info,
     get_doctor_info, check_prescription, get_prescription_details,
-    get_availabilities, api_message
+    get_availabilities, api_message, prescription_priority
 )
 from modules.data_utils import (
     update_prescription, is_date_within_range,
@@ -604,7 +604,9 @@ def process_prescription(prescription, previous_data, chat_id=None, notify_statu
             logger.warning(f"Impossibile salvare la descrizione della prescrizione: {str(e)}")
 
     # Step 7: Get availabilities
-    availabilities = get_availabilities(patient_id, process_id, nre, order_ids)
+    availabilities = get_availabilities(
+        patient_id, process_id, nre, order_ids, prescription_priority(prescription_details)
+    )
     if not availabilities or 'content' not in availabilities:
         error_msg = f"Impossibile ottenere le disponibilità per {nre}, sei sicuro che non sia già prenotata?"
         logger.error(error_msg)
